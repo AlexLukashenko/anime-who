@@ -8,7 +8,7 @@
     "pack": "node scripts/pack.mjs",
     "check-version": "node scripts/check-version.mjs"
   },
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Chrome-расширение: фото, имя и роль персонажа аниме, когда о нём говорят в серии",
   "license": "MIT",
   "repository": {
