@@ -5,6 +5,7 @@ import { buildMatcher, matchText, findMentions, romajiKey } from '../extension/l
 import { episodeNumberFromName, pickCandidates, subtitleLabel } from '../extension/lib/episodes.js';
 import { relatedCharacters, stripSpoilers } from '../extension/lib/desc.js';
 import { pickPrune } from '../extension/lib/cache.js';
+import { matchAnilist } from '../extension/lib/match.js';
 import { SyncEstimator, OffsetTracker } from '../extension/lib/sync.js';
 
 // Синтетические строки в формате японских [cc]-субтитров: метки говорящих, фуригана, ремарки, музыка
@@ -261,4 +262,27 @@ test('Персонажи прошлых сезонов не отнимают и�
     { id: 3, name: 'Fuyou', russian: 'Фуё', japanese: '芙蓉', past: true },
   ]);
   assert.deepEqual(matchText(m, '猫猫と芙蓉'), [{ id: 1, token: '猫猫' }, { id: 3, token: '芙蓉' }]);
+});
+
+test('Сверка Shikimori ↔ AniList: латиница, иероглифы целиком и по частям, неоднозначное — нет', () => {
+  const shiki = [
+    { id: 1, name: 'Maomao', japanese: '猫猫', synonyms: [] },
+    { id: 2, name: 'Renshi', japanese: '壬氏', synonyms: [] }, // AniList: Jinshi — сойдётся по иероглифам
+    { id: 3, name: 'Luohan Han', japanese: '漢 羅漢', synonyms: [] }, // AniList: Rakan / 羅漢 — по части имени
+    { id: 4, name: 'Luomen Han', japanese: '漢 羅門', synonyms: [] }, // часть «漢» общая — по ней не сводим
+    { id: 5, name: 'Landlord', japanese: '地主', synonyms: [] }, // в AniList нет
+  ];
+  const anilist = [
+    { id: 10, full: 'Maomao', native: '猫猫', alternative: [], gender: 'Female' },
+    { id: 11, full: 'Jinshi', native: '壬氏', alternative: ['Ka Zuigetsu'], gender: 'Male' },
+    { id: 12, full: 'Rakan', native: '羅漢', alternative: [], gender: 'Male' },
+    { id: 12, full: 'Rakan', native: '羅漢', alternative: [], gender: 'Male' }, // повтор из другого сезона
+    { id: 13, full: 'Rakan Kan', native: '漢 羅門', alternative: [], gender: 'Male' },
+  ];
+  const m = matchAnilist(shiki, anilist);
+  assert.equal(m.get(1)?.id, 10);
+  assert.equal(m.get(2)?.id, 11);
+  assert.equal(m.get(3)?.id, 12);
+  assert.equal(m.get(4)?.id, 13);
+  assert.equal(m.has(5), false);
 });

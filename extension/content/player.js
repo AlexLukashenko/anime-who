@@ -62,6 +62,8 @@
   let lastSubT = null;
   const lastShown = new Map();
   let muted = new Set();
+  // «Это не он»: id персонажа → слова, по которым его не считать упомянутым (в этом аниме)
+  let notHim = new Map();
   const images = new Map();
   let knownIds = null; // режим без спойлеров: ID персонажей, знакомых к началу серии (null — ещё не знаем)
   let knownInfo = null;
@@ -101,6 +103,44 @@
     if (c?.gender === 'f') return 'упомянута';
     if (c?.gender === 'm') return 'упомянут';
     return 'упомянут(а)';
+  }
+
+  /** Упоминание отменено кнопкой «Это не он». */
+  function isNotHim(ev) {
+    return !!ev?.token && !!notHim.get(ev.id)?.has(ev.token);
+  }
+
+  function liveMentions() {
+    return (data?.mentions || []).filter((m) => !isNotHim(m));
+  }
+
+  async function saveNotHim() {
+    if (!data?.anime) return;
+    const obj = Object.fromEntries([...notHim].filter(([, t]) => t.size).map(([id, t]) => [id, [...t]]));
+    await chrome.storage.local.set({ [`notHim:${data.anime.malId}`]: obj });
+  }
+
+  async function markNotHim(id, token, el) {
+    const c = charById(id);
+    if (!c || !token) return;
+    if (!notHim.has(id)) notHim.set(id, new Set());
+    notHim.get(id).add(token);
+    await saveNotHim();
+    if (el) { el.classList.add('out'); setTimeout(() => el.remove(), 450); }
+    renderPanel();
+    toast(`Больше не покажу «${nameParts(c).primary}» по слову «${token}» в этом аниме.`, 8000, {
+      label: 'Отменить',
+      run: () => unmarkNotHim(id, token),
+    });
+  }
+
+  async function unmarkNotHim(id, token) {
+    const set = notHim.get(id);
+    if (!set) return;
+    if (token) set.delete(token); else set.clear();
+    if (!set.size) notHim.delete(id);
+    await saveNotHim();
+    renderPanel();
   }
 
   const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -165,8 +205,10 @@
     data.speakers = (data.speakers || []).slice().sort((a, b) => a.t - b.t);
     settings = { ...DEFAULTS, ...(data.settings || {}) };
     const key = `muted:${data.anime?.malId}`;
-    const r = await chrome.storage.local.get(key);
+    const nhKey = `notHim:${data.anime?.malId}`;
+    const r = await chrome.storage.local.get([key, nhKey]);
     muted = new Set(r[key] || []);
+    notHim = new Map(Object.entries(r[nhKey] || {}).map(([id, toks]) => [Number(id), new Set(toks)]));
     offset = data.offset?.value ?? null;
     offsetHow = offset != null ? data.offset.source : null;
     lastSubT = null;
@@ -452,7 +494,14 @@
   .item.muted { opacity: .4; }
   .eye { background: none; border: 0; color: #fff; opacity: .5; cursor: pointer; font-size: 1em; padding: 4px; }
   .eye:hover { opacity: 1; }
-  .banner { pointer-events: auto; cursor: pointer; }
+  .banner { pointer-events: auto; cursor: pointer; position: relative; }
+  .nothim { position: absolute; top: 6px; right: 8px; padding: 1px 7px; border-radius: 6px; font: inherit; font-size: .7em;
+    background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.15); color: #fff; cursor: pointer; opacity: 0; transition: opacity .2s; }
+  .banner:hover .nothim, .nothim:focus-visible { opacity: .85; }
+  .nothim:hover { opacity: 1; background: rgba(255,90,90,.35); }
+  .toast .act { pointer-events: auto; margin-left: 10px; background: rgba(255,255,255,.15); border: 1px solid rgba(255,255,255,.2);
+    color: #fff; border-radius: 6px; padding: 1px 8px; font: inherit; cursor: pointer; }
+  .item .note button { background: none; border: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; padding: 0; }
   .banner:hover { border-color: rgba(255,255,255,.3); }
   .past { font-size: .78em; opacity: .6; margin-top: 2px; }
   .open-card { cursor: pointer; }
@@ -508,7 +557,9 @@
     els.list.addEventListener('click', onListClick);
     els.stack.addEventListener('click', (e) => {
       const b = e.target.closest('.banner[data-id]');
-      if (b) openCard(Number(b.dataset.id));
+      if (!b) return;
+      if (e.target.closest('.nothim')) { markNotHim(Number(b.dataset.id), b.dataset.token, b); return; }
+      openCard(Number(b.dataset.id));
     });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && card) { e.stopPropagation(); closeCard(); } }, true);
     placeHost();
@@ -576,11 +627,18 @@
     if (els.stack) els.stack.innerHTML = '';
   }
 
-  function toast(text, ms = 7000) {
+  function toast(text, ms = 7000, action = null) {
     ensureUi();
     const el = document.createElement('div');
     el.className = 'toast';
     el.textContent = text;
+    if (action) {
+      const b = document.createElement('button');
+      b.className = 'act';
+      b.textContent = action.label;
+      b.addEventListener('click', () => { action.run(); el.remove(); });
+      el.appendChild(b);
+    }
     els.wrap.appendChild(el);
     setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 600); }, ms);
   }
@@ -605,6 +663,7 @@
   async function showBanner(ev, kind) {
     const c = charById(ev.id);
     if (!c || muted.has(c.id) || !roleAllowed(c)) return;
+    if (kind === 'mention' && isNotHim(ev)) return;
     const v = video.currentTime;
     const key = `${kind}:${c.id}`;
     const prev = lastShown.get(key);
@@ -616,13 +675,18 @@
     const el = document.createElement('div');
     el.className = 'banner';
     el.dataset.id = c.id;
+    if (kind === 'mention' && ev.token) el.dataset.token = ev.token;
     el.title = 'Подробнее о персонаже (видео встанет на паузу)';
     el.innerHTML = `${settings.fPhoto ? '<div class="ph"></div>' : ''}<div class="text">
       ${settings.fTag ? `<div class="tag ${kind}"></div>` : ''}<div class="name"></div>
       ${sub ? '<div class="sub"></div>' : ''}${past ? '<div class="past"></div>' : ''}
       ${settings.fToken && ev.token ? '<div class="token"></div>' : ''}
-      ${settings.fDesc && c.desc ? '<div class="desc"></div>' : ''}</div>`;
+      ${settings.fDesc && c.desc ? '<div class="desc"></div>' : ''}</div>
+      ${kind === 'mention' && ev.token ? '<button class="nothim"></button>' : ''}`;
     const set = (sel, text) => { const n = el.querySelector(sel); if (n) n.textContent = text; };
+    set('.nothim', c.gender === 'f' ? 'не она' : 'не он');
+    const nh = el.querySelector('.nothim');
+    if (nh) nh.title = `Это не ${c.gender === 'f' ? 'она' : 'он'}: больше не показывать по слову «${ev.token}» в этом аниме`;
     set('.tag', tagLabel(kind, c));
     set('.name', primary);
     set('.sub', sub);
@@ -661,7 +725,7 @@
     if (data.subtitle) {
       const label = data.subtitle.custom ? 'свой файл' : `Jimaku · ${data.subtitle.label || data.subtitle.format?.toUpperCase() || 'файл'}`;
       parts.push(`Субтитры: <span title="${esc(data.subtitle.name)}">${esc(label)}</span>`);
-      parts.push(`Упоминаний в серии: ${data.mentions.length}`);
+      parts.push(`Упоминаний в серии: ${liveMentions().length}`);
     } else {
       parts.push(esc(data.message || 'Субтитров нет — баннеры недоступны, панель работает.'));
     }
@@ -697,7 +761,7 @@
     if (!data?.characters?.length) { els.list.innerHTML = ''; return; }
     const now = video && offset != null ? video.currentTime - offset : null;
     const seen = new Map();
-    if (now != null) for (const m of data.mentions) { if (m.t <= now) seen.set(m.id, m.t); else break; }
+    if (now != null) for (const m of data.mentions) { if (m.t > now) break; if (!isNotHim(m)) seen.set(m.id, m.t); }
     const recent = [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => charById(id)).filter(Boolean);
     // Персонажи прошлых сезонов — только если их назвали в этой серии
     let rest = data.characters.filter((c) => !seen.has(c.id) && !c.past).sort((a, b) => (a.role === b.role ? 0 : a.role === 'main' ? -1 : 1));
@@ -717,7 +781,7 @@
     const item = (c) => `<div class="item ${muted.has(c.id) ? 'muted' : ''} ${roleAllowed(c) ? '' : 'hidden-role'}" data-id="${c.id}">
         ${settings.fPhoto ? `<a class="pic open-card" data-card="${c.id}" title="Подробнее"><div class="ph" data-img="${c.id}"></div></a>` : ''}
         <div class="meta"><span class="name open-card" data-card="${c.id}" title="Подробнее"></span><a class="ext" data-open="${shikiUrl(c)}" href="${shikiUrl(c)}" target="_blank" rel="noopener noreferrer" title="Открыть на Shikimori в новой вкладке">↗</a>
-          <div class="sub"></div>${c.past ? '<div class="past"></div>' : ''}${settings.fDesc && c.desc ? '<div class="desc"></div>' : ''}${roleAllowed(c) ? '' : '<div class="note">не показывается в баннерах</div>'}</div>
+          <div class="sub"></div>${c.past ? '<div class="past"></div>' : ''}${settings.fDesc && c.desc ? '<div class="desc"></div>' : ''}${roleAllowed(c) ? '' : '<div class="note">не показывается в баннерах</div>'}${notHim.get(c.id)?.size ? `<div class="note">не считаю упоминанием: ${[...notHim.get(c.id)].map((t) => `«${esc(t)}»`).join(', ')} · <button data-unnothim="${c.id}">вернуть</button></div>` : ''}</div>
         <button class="eye" data-mute="${c.id}" title="${muted.has(c.id) ? 'Снова показывать' : 'Не показывать баннеры'}">${muted.has(c.id) ? '◌' : '◉'}</button></div>`;
     els.list.innerHTML = (recent.length ? `<div class="section">Упоминались в этой серии</div>${recent.map(item).join('')}` : '')
       + (rest.length ? `<div class="section">${recent.length ? 'Остальные' : 'Персонажи'}</div>${rest.map(item).join('')}` : '')
@@ -760,6 +824,8 @@
   }
 
   async function onListClick(e) {
+    const un = e.target.closest('[data-unnothim]');
+    if (un) { unmarkNotHim(Number(un.dataset.unnothim)); return; }
     const cardLink = e.target.closest('[data-card]');
     if (cardLink) { openCard(Number(cardLink.dataset.card)); return; }
     const link = e.target.closest('[data-open]');

@@ -92,6 +92,12 @@ try {
   check('аниме и субтитры определились', !!info.malId && !!info.subtitle, `MAL ${info.malId}, ${info.subtitle?.label || '—'}`);
   check('короткая подпись субтитров', !!info.subtitle?.label && info.subtitle.label.length < 40 && info.subtitle.label !== info.subtitle.name, info.subtitle?.label);
   check('пример баннера — персонаж этой серии', !!info.sample?.ru && !!info.sample?.img, info.sample?.ru);
+  const cast = await sw.evaluate(async () => {
+    const all = await chrome.storage.local.get(null);
+    const al = Object.keys(all).filter((k) => k.startsWith('anilist4:')).length;
+    return al;
+  });
+  check('AniList загружен для всех сезонов', cast >= 2, `${cast} сезона`);
 
   const prequels = await sw.evaluate(async () => Object.keys(await chrome.storage.local.get(null)).filter((k) => k.startsWith('shiki3:')));
   check('загружены прошлые сезоны', prequels.length >= 2, prequels.join(', '));
@@ -153,6 +159,39 @@ try {
   const resumed = await waitFor(() => overlay(() => !document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.card')
     && ![...document.querySelectorAll('video')].sort((a, b) => (b.duration || 0) - (a.duration || 0))[0].paused), 5);
   check('после закрытия видео снова играет', !!resumed);
+
+  // «Это не он»: баннер уходит, в панели — пометка, «вернуть» отменяет
+  await overlay(() => document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.stack').replaceChildren());
+  await overlay((t) => { const v = [...document.querySelectorAll('video')].sort((a, b) => (b.duration || 0) - (a.duration || 0))[0]; v.currentTime = t; v.play(); }, SEEK);
+  const nh = await waitFor(() => overlay(() => {
+    const b = document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.banner[data-token]');
+    if (!b) return null;
+    const r = { id: b.dataset.id, token: b.dataset.token, label: b.querySelector('.nothim').textContent };
+    b.querySelector('.nothim').click();
+    return r;
+  }), 40);
+  check('кнопка «не он» на баннере', !!nh, JSON.stringify(nh));
+  const saved = nh && await waitFor(async () => {
+    const all = await sw.evaluate(() => chrome.storage.local.get(null));
+    const k = Object.keys(all).find((x) => x.startsWith('notHim:'));
+    return k && all[k][nh.id]?.includes(nh.token) ? all[k] : null;
+  }, 5);
+  const afterNh = await overlay(() => {
+    const r = document.querySelector('kto-eto-overlay').shadowRoot;
+    return { card: !!r.querySelector('.card'), toast: [...r.querySelectorAll('.toast')].some((t) => t.querySelector('.act')) };
+  });
+  check('«не он» запомнено, карточка не открылась, есть «Отменить»', !!saved && !afterNh.card && afterNh.toast, JSON.stringify(saved));
+  await overlay(() => document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.toggle').click());
+  await sleep(1200);
+  const back = await overlay(() => {
+    const b = document.querySelector('kto-eto-overlay').shadowRoot.querySelector('[data-unnothim]');
+    b?.click();
+    return !!b;
+  });
+  await sleep(800);
+  const cleared = await sw.evaluate(async () => Object.entries(await chrome.storage.local.get(null)).filter(([k, v]) => k.startsWith('notHim:') && Object.keys(v).length).length);
+  check('«вернуть» в панели отменяет', back && cleared === 0);
+  await overlay(() => document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.close').click());
 
   // Окно расширения
   await sw.evaluate(() => chrome.storage.sync.remove('cooldownSeconds'));

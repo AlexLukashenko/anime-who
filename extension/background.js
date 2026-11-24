@@ -2,12 +2,13 @@
 // хранение сдвигов, связь между вкладкой, плеером и offscreen-документом (VAD).
 
 import { parseSubtitle, speechIntervals } from './lib/subs.js';
-import { buildMatcher, findMentions, romajiKey } from './lib/names.js';
+import { buildMatcher, findMentions } from './lib/names.js';
 import { pickCandidates, subtitleLabel } from './lib/episodes.js';
 import { SETTINGS_DEFAULTS } from './lib/settings.js';
 import { cleanDescription, relatedCharacters } from './lib/desc.js';
 import { parseAnimeRef } from './lib/refs.js';
 import { pickPrune } from './lib/cache.js';
+import { matchAnilist } from './lib/match.js';
 
 const SHIKI = 'https://shikimori.io';
 const JIMAKU = 'https://jimaku.cc';
@@ -151,33 +152,41 @@ function pageKey(url) {
 
 // ---------- AniList (ID для Jimaku + альтернативные японские имена) ----------
 
-const ANILIST_QUERY = `query($mal: Int) {
+const ANILIST_QUERY = `query($mal: Int, $page: Int) {
   Media(idMal: $mal, type: ANIME) {
     id episodes title { romaji english native }
-    characters(perPage: 50, sort: [ROLE, RELEVANCE]) {
+    characters(page: $page, perPage: 25, sort: [ROLE, RELEVANCE]) {
+      pageInfo { hasNextPage }
       edges { role voiceActors(language: JAPANESE, sort: [RELEVANCE]) { name { full native } } node { id gender name { full native alternative } } }
     }
   }
 }`;
 
 async function loadAnilist(malId) {
-  const key = `anilist3:${malId}`; // 2 — с полом персонажа, 3 — с японскими сэйю
+  const key = `anilist4:${malId}`; // 2 — пол, 3 — японские сэйю, 4 — все страницы персонажей
   const cached = await cacheGet(key, 7 * DAY);
   if (cached) return cached;
   try {
-    const res = await fetchWithTimeout('https://graphql.anilist.co', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ query: ANILIST_QUERY, variables: { mal: Number(malId) } }),
-    });
-    const json = await res.json();
-    const m = json?.data?.Media;
+    let m = null;
+    const edges = [];
+    for (let page = 1; page <= 4; page++) {
+      const res = await fetchWithTimeout('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ query: ANILIST_QUERY, variables: { mal: Number(malId), page } }),
+      });
+      m = (await res.json())?.data?.Media;
+      if (!m) break;
+      edges.push(...(m.characters?.edges || []));
+      if (!m.characters?.pageInfo?.hasNextPage) break;
+    }
     if (!m) return null;
     const value = {
       id: m.id,
       episodes: m.episodes,
       title: m.title,
-      characters: (m.characters?.edges || []).map((e) => ({
+      characters: edges.map((e) => ({
+        id: e.node.id,
         full: e.node.name.full,
         native: e.node.name.native,
         alternative: e.node.name.alternative || [],
@@ -201,23 +210,16 @@ function genderOf(g) {
   return null;
 }
 
-function mergeCharacters(shiki, anilist) {
-  if (!anilist) return shiki.characters.map((c) => ({ ...c, altNames: [], gender: null, seiyu: [] }));
-  const index = new Map();
-  for (const ac of anilist.characters) {
-    for (const n of [ac.full, ...ac.alternative]) {
-      const k = romajiKey(n);
-      if (k.length >= 3 && !index.has(k)) index.set(k, ac);
-    }
-  }
+/**
+ * Персонажи Shikimori + данные AniList (варианты имён, пол, сэйю). anilistPool — персонажи
+ * AniList текущего и прошлых сезонов: в списке сезона на AniList бывает меньше персонажей.
+ */
+function mergeCharacters(shiki, anilistPool) {
+  const matched = matchAnilist(shiki.characters, anilistPool || []);
   return shiki.characters.map((c) => {
-    let match = null;
-    for (const n of [c.name, ...c.synonyms]) {
-      match = index.get(romajiKey(n));
-      if (match) break;
-    }
-    const altNames = match ? [match.native, ...match.alternative].filter(Boolean) : [];
-    return { ...c, altNames, gender: genderOf(match?.gender), seiyu: match?.seiyu || [] };
+    const a = matched.get(c.id);
+    const altNames = a ? [a.native, ...a.alternative].filter(Boolean) : [];
+    return { ...c, altNames, gender: genderOf(a?.gender), seiyu: a?.seiyu || [] };
   });
 }
 
@@ -228,9 +230,7 @@ function mergeCharacters(shiki, anilist) {
  * сезоне, — с пометкой past, и все ID персонажей прошлых сезонов (для режима без спойлеров).
  */
 async function loadPastSeasons(shiki) {
-  const currentIds = new Set(shiki.characters.map((c) => c.id));
-  const past = new Map();
-  const allIds = new Set();
+  const seasons = [];
   const visited = new Set([shiki.malId]);
   let queue = [...(shiki.prequels || [])];
   for (let depth = 0; depth < 4 && queue.length; depth++) {
@@ -240,11 +240,7 @@ async function loadPastSeasons(shiki) {
       visited.add(malId);
       try {
         const prev = await loadShikimori(malId);
-        const merged = mergeCharacters(prev, await loadAnilist(malId));
-        for (const c of merged) {
-          allIds.add(c.id);
-          if (!currentIds.has(c.id) && !past.has(c.id)) past.set(c.id, { ...c, past: true, season: prev.russian || prev.name });
-        }
+        seasons.push({ shiki: prev, anilist: await loadAnilist(malId) });
         next.push(...(prev.prequels || []));
       } catch (e) {
         console.warn('Не удалось загрузить прошлый сезон', malId, e);
@@ -252,7 +248,27 @@ async function loadPastSeasons(shiki) {
     }
     queue = next;
   }
-  return { characters: [...past.values()], allIds };
+  return seasons;
+}
+
+/**
+ * Все персонажи сезона и его приквелов: текущие — как есть, из прошлых — только те,
+ * кого нет в текущем (с пометкой past). allPrevIds — ID всех персонажей прошлых сезонов.
+ */
+async function loadCast(shiki, anilist) {
+  const seasons = await loadPastSeasons(shiki);
+  const pool = [anilist, ...seasons.map((x) => x.anilist)].flatMap((a) => a?.characters || []);
+  const current = mergeCharacters(shiki, pool);
+  const currentIds = new Set(current.map((c) => c.id));
+  const past = new Map();
+  const allPrevIds = new Set();
+  for (const { shiki: prev } of seasons) {
+    for (const c of mergeCharacters(prev, pool)) {
+      allPrevIds.add(c.id);
+      if (!currentIds.has(c.id) && !past.has(c.id)) past.set(c.id, { ...c, past: true, season: prev.russian || prev.name });
+    }
+  }
+  return { characters: [...current, ...past.values()], allPrevIds };
 }
 
 // ---------- Jimaku ----------
@@ -399,8 +415,7 @@ async function buildEpisode(info, episode) {
   const malId = info.malId;
   const shiki = await loadShikimori(malId);
   const anilist = await loadAnilist(malId);
-  const pastSeasons = await loadPastSeasons(shiki);
-  const characters = [...mergeCharacters(shiki, anilist), ...pastSeasons.characters];
+  const { characters } = await loadCast(shiki, anilist);
   const seasonEps = shiki.episodes || shiki.episodesAired || anilist?.episodes || 0;
 
   const result = {
@@ -492,13 +507,13 @@ async function knownCharacters(malId, episode) {
   const settings = await getSettings();
   const shiki = await loadShikimori(malId);
   const anilist = await loadAnilist(malId);
-  const pastSeasons = await loadPastSeasons(shiki);
-  const known = new Set(pastSeasons.allIds);
+  const cast = await loadCast(shiki, anilist);
+  const known = new Set(cast.allPrevIds);
   let checked = 0;
   let missing = 0;
   const prevEpisodes = Array.from({ length: Math.max(0, Math.min(episode - 1, 200)) }, (_, i) => i + 1);
   if (prevEpisodes.length) {
-    const characters = [...mergeCharacters(shiki, anilist), ...pastSeasons.characters];
+    const { characters } = cast;
     const seasonEps = shiki.episodes || shiki.episodesAired || anilist?.episodes || 0;
     let files = null;
     let matcher = null;
