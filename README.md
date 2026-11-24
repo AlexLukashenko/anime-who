@@ -26,7 +26,7 @@
 
 Расширения нет в Chrome Web Store, поэтому оно ставится как распакованное:
 
-1. Скачайте `kto-eto-<версия>.zip` из [последнего релиза](https://github.com/AlexLukashenko/anime-who/releases/latest) и распакуйте в отдельную папку. Или `git clone https://github.com/AlexLukashenko/anime-who.git` — тогда нужна папка `extension`.
+1. Скачайте `anime-who-<версия>.zip` из [последнего релиза](https://github.com/AlexLukashenko/anime-who/releases/latest) и распакуйте в отдельную папку. Или `git clone https://github.com/AlexLukashenko/anime-who.git` — тогда нужна папка `extension`.
 2. Откройте `chrome://extensions`.
 3. Включите «Режим разработчика» (переключатель справа сверху).
 4. Нажмите «Загрузить распакованное расширение» и выберите распакованную папку (или `extension` из репозитория).
@@ -97,7 +97,7 @@ extension/
 tests/core.test.mjs    — юнит-тесты (npm test)
 tests/e2e/             — сквозные тесты: run.mjs (Kodik), run-sites.mjs (CVH, DreamCast, ручной выбор) — на макетах сайтов;
                          run-live.mjs — на настоящем YummyAnime (npm run test:live, --shots обновляет скриншоты в docs/)
-scripts/pack.mjs       — сборка dist/kto-eto-<версия>.zip (npm run pack)
+scripts/pack.mjs       — сборка dist/anime-who-<версия>.zip (npm run pack)
 scripts/check-version.mjs — версии manifest.json и package.json совпадают (и с тегом релиза)
 ```
 
