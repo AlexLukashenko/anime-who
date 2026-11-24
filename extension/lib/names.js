@@ -22,6 +22,7 @@ const JP_GENERIC = new Set(`
 客 客人 男性 女性 ナレーション ナレーター 語り手 語り 店員 役人 看守 門番 護衛 番頭 農民 町人 通行人
 王 王様 女王 王子 王女 姫 姫様 殿下 陛下 閣下 殿 様 母様 父様 マスター ボス ママ パパ シスター ドクター
 キャプテン 高官 見張り役 楼主 主 皆 みんな 彼 彼女 あいつ 俺 私 僕
+アナウンサー アナウンス 実況 司会 アイドル
 `.split(/\s+/).filter(Boolean));
 
 function escapeRe(s) {
@@ -141,6 +142,11 @@ function formKatakana(s) {
   return { sk: collapse(sk), vw: collapse(vw) };
 }
 
+/** Euphemia «eueia» ≈ ユーフェミア «ueia», Ashur «au» = アシュルー «au». */
+function vowelsAlike(a, b) {
+  return a === b || (a.length >= 2 && b.length >= 2 && (a.includes(b) || b.includes(a)));
+}
+
 function collapse(x) {
   return x.replace(/(.)\1+/g, '$1');
 }
@@ -191,7 +197,9 @@ export function learnSpeakerNames(events, characters, matcher = buildMatcher(cha
     if (sk.length < 2 || !bySkel.has(sk)) continue;
     let owners = [...bySkel.get(sk).values()];
     if (owners.some((o) => !o.ch.past)) owners = owners.filter((o) => !o.ch.past);
-    if (owners.length > 1) owners = owners.filter((o) => o.vws.has(vw));
+    // Два согласных — слишком мало (アナウンサー ≈ Niji Ebina): тогда нужны и похожие гласные.
+    // Если персонажей несколько — тоже выбираем по гласным.
+    if (owners.length > 1 || sk.length < 3) owners = owners.filter((o) => [...o.vws].some((v) => vowelsAlike(v, vw)));
     if (owners.length !== 1) continue;
     const { id } = owners[0].ch;
     if (!learned.has(id)) learned.set(id, []);
