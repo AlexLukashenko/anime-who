@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="ui.css">
+  <title>Кто это? — настройки</title>
+</head>
+<body class="options">
+  <h1>Кто это? — настройки</h1>
+
+  <p class="muted">Что и кого показывать, задержка субтитров и автоподбор по звуку — во вкладке «Настройки» в окне расширения (иконка на панели Chrome).</p>
+
+  <div class="card">
+    <div class="label">Jimaku (субтитры)</div>
+    <label class="field">API-ключ (необязательно)
+      <input type="text" id="jimakuKey" placeholder="без ключа тоже работает" autocomplete="off" spellcheck="false"></label>
+    <p class="muted">Без ключа расширение читает публичные страницы jimaku.cc. С ключом (бесплатно: аккаунт на jimaku.cc → Account → API key) запросы легче и надёжнее.</p>
+  </div>
+
+  <div class="card">
+    <div class="label">Данные</div>
+    <button class="btn" id="clear">Очистить кеш персонажей и субтитров</button>
+    <span class="muted" id="clearMsg"></span>
+  </div>
+
+  <p class="muted">Горячие клавиши: Alt+Shift+C — панель персонажей, Alt+Shift+S — подобрать задержку заново по звуку. Изменить: chrome://extensions/shortcuts</p>
+  <script src="options.js" type="module"></script>
+</body>
+</html>

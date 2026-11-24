@@ -1,0 +1,15 @@
+{
+  "name": "kto-eto-anime",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/core.test.mjs"
+  },
+  "version": "0.2.0",
+  "description": "Chrome-расширение: фото, имя и роль персонажа аниме, когда о нём говорят в серии",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AlexLukashenko/anime-who.git"
+  }
+}

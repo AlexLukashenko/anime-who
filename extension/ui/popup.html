@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="ui.css">
+  <title>Кто это?</title>
+</head>
+<body class="popup">
+  <header>
+    <img src="../icons/icon48.png" alt="" width="28" height="28">
+    <div>
+      <div class="h1">Кто это?</div>
+      <div class="muted" id="title">—</div>
+    </div>
+    <label class="switch" title="Включить/выключить баннеры"><input type="checkbox" data-setting="enabled"><span></span></label>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="episode">Серия</button>
+    <button class="tab" data-tab="settings">Настройки</button>
+  </nav>
+
+  <!-- ===== Вкладка «Серия» ===== -->
+  <div class="pane" id="pane-episode">
+    <section id="unsupported" hidden>
+      <p>Откройте серию на <b>YummyAnime</b> (любой плеер) или на сайте <b>DreamCast</b> и запустите видео — расширение само найдёт персонажей и субтитры.</p>
+    </section>
+
+    <div class="card" id="what" hidden>
+      <div class="label">Что смотрим</div>
+      <div id="what-title" class="what-title">—</div>
+      <div id="what-ep" class="muted small">—</div>
+      <button class="btn small" id="what-toggle">Не то? Указать вручную</button>
+      <div id="what-edit" hidden>
+        <label class="field">Аниме — ссылка на Shikimori/MyAnimeList или ID
+          <input type="text" id="anime-input" placeholder="https://shikimori.io/animes/…" autocomplete="off" spellcheck="false"></label>
+        <label class="field">Серия
+          <input type="number" id="ep-input" min="1" step="1" placeholder="авто"></label>
+        <div class="row">
+          <button class="btn small accent" id="save-what">Сохранить для этой страницы</button>
+          <button class="btn small" id="reset-what">Сбросить</button>
+        </div>
+        <div id="what-msg" class="muted small"></div>
+      </div>
+    </div>
+
+    <section id="main" hidden>
+      <div class="card">
+        <div class="label">Задержка субтитров</div>
+        <div class="row delay">
+          <button class="btn small" data-d="-5">−5</button>
+          <button class="btn small" data-d="-0.5">−0.5</button>
+          <input type="number" id="delay" step="0.5" title="На сколько секунд субтитры позже начала видео (заставка студии озвучки)">
+          <span class="muted">с</span>
+          <button class="btn small" data-d="0.5">+0.5</button>
+          <button class="btn small" data-d="5">+5</button>
+        </div>
+        <div id="sync" class="muted hint">—</div>
+        <div class="toggle-row">
+          <span>Автоподбор по звуку
+            <span class="muted small">баннеры не ждут: пока он слушает, работает текущая задержка</span></span>
+          <label class="switch"><input type="checkbox" data-setting="autoSync"><span></span></label>
+        </div>
+        <div class="row">
+          <button class="btn small" id="resync" title="Alt+Shift+S">Подобрать заново по звуку</button>
+          <button class="btn small" id="tabcap" title="Если плеер не отдаёт звук напрямую" hidden>Слушать звук вкладки</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="label">Субтитры для поиска имён</div>
+        <select id="subs"></select>
+        <div class="row">
+          <label class="btn small" for="file">Загрузить свой файл…</label>
+          <input type="file" id="file" accept=".srt,.ass,.ssa,.vtt" hidden>
+        </div>
+      </div>
+
+      <button class="btn wide" id="panel">Панель персонажей (Alt+Shift+C)</button>
+    </section>
+  </div>
+
+  <!-- ===== Вкладка «Настройки» ===== -->
+  <div class="pane" id="pane-settings" hidden>
+    <div class="card">
+      <div class="label">Кого показывать</div>
+      <label class="check"><input type="checkbox" data-setting="showMain"> Главных героев</label>
+      <label class="check"><input type="checkbox" data-setting="showSupporting"> Второстепенных персонажей</label>
+      <label class="check"><input type="checkbox" data-setting="showSpeakers"> <span>Кто говорит <span class="muted">— если в субтитрах есть метки говорящих</span></span></label>
+      <div class="muted small">Отдельных персонажей можно выключить в панели (кнопка ◉).</div>
+    </div>
+
+    <div class="card">
+      <div class="label">Что показывать о персонаже</div>
+      <label class="check"><input type="checkbox" data-setting="fPhoto"> Фото</label>
+      <label class="check"><input type="checkbox" data-setting="fRu"> Имя по-русски</label>
+      <label class="check"><input type="checkbox" data-setting="fJp"> Имя иероглифами</label>
+      <label class="check"><input type="checkbox" data-setting="fRomaji"> Имя латиницей</label>
+      <label class="check"><input type="checkbox" data-setting="fRole"> Роль (главный / второстепенный)</label>
+      <label class="check"><input type="checkbox" data-setting="fTag"> Пометка «упомянут» / «говорит»</label>
+      <label class="check"><input type="checkbox" data-setting="fToken"> <span>Как назвали в реплике <span class="muted">(壬氏様 → 壬氏)</span></span></label>
+      <label class="check"><input type="checkbox" data-setting="fDesc"> <span>Краткое описание с Shikimori <span class="warn">может спойлерить</span></span></label>
+      <div class="preview-wrap"><div class="label">Пример баннера</div><div id="preview"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="label">Баннер</div>
+      <div class="grid2">
+        <label>Показывать, с<input type="number" data-setting="bannerSeconds" min="2" max="30" step="1"></label>
+        <label>Не чаще раза в, с<input type="number" data-setting="cooldownSeconds" min="0" max="3600" step="10"></label>
+      </div>
+      <label class="field">Где
+        <select data-setting="position"><option value="top-left">Слева сверху</option><option value="top-right">Справа сверху</option></select></label>
+    </div>
+
+    <div class="card">
+      <div class="label">Задержка по умолчанию</div>
+      <div class="grid2">
+        <label>Секунд<input type="number" data-setting="startDelay" step="0.5"></label>
+      </div>
+      <div class="muted small">Для озвучек, где задержку ещё не подбирали. Поправки ± и автоподбор запоминаются для каждой озвучки отдельно.</div>
+    </div>
+  </div>
+
+  <footer><a href="options.html" target="_blank">Jimaku-ключ и кеш</a></footer>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>
