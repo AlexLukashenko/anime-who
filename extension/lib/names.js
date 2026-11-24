@@ -32,6 +32,175 @@ function codeLen(s) {
   return [...s].length;
 }
 
+// ---------- хангыль → катакана ----------
+// У персонажей корейских тайтлов в поле «японское имя» на Shikimori/AniList часто хангыль,
+// а в японских субтитрах те же имена — катаканой (유라 → ユラ, 지슈카 → ジシュカ).
+
+const HANGUL_RE = /[\p{Script=Hangul}]/u;
+const H_INIT = ['g', 'kk', 'n', 'd', 'tt', 'r', 'm', 'b', 'pp', 's', 'ss', '', 'j', 'jj', 'ch', 'k', 't', 'p', 'h'];
+const H_VOW = ['a', 'e', 'ya', 'ye', 'o', 'e', 'yo', 'ye', 'o', 'wa', 'we', 'we', 'yo', 'u', 'wo', 'we', 'wi', 'yu', 'u', 'ui', 'i'];
+const H_FIN = ['', 'ク', 'ク', 'ク', 'ン', 'ン', 'ン', 'ト', 'ル', 'ル', 'ル', 'ル', 'ル', 'ル', 'ル', 'ル', 'ム', 'プ', 'プ', 'ス', 'ス', 'ン', 'ッ', 'ッ', 'ク', 'ッ', 'プ', ''];
+const KANA_ROWS = {
+  '': 'アイウエオ', k: 'カキクケコ', g: 'ガギグゲゴ', s: 'サシスセソ', t: 'タチツテト', d: 'ダヂヅデド',
+  n: 'ナニヌネノ', h: 'ハヒフヘホ', b: 'バビブベボ', p: 'パピプペポ', m: 'マミムメモ', r: 'ラリルレロ',
+};
+const VOWEL_IDX = { a: 0, i: 1, u: 2, e: 3, o: 4 };
+const SMALL_Y = { a: 'ャ', u: 'ュ', o: 'ョ', e: 'ェ' };
+const SMALL_V = { a: 'ァ', i: 'ィ', u: 'ゥ', e: 'ェ', o: 'ォ' };
+
+function kanaSyllable(cons, vowel) {
+  const c = { kk: 'k', tt: 't', pp: 'p', ss: 's', jj: 'j' }[cons] ?? cons;
+  if (c === 'j' || c === 'ch') {
+    const i = c === 'j' ? 'ジ' : 'チ';
+    const v = vowel.replace(/^[yw]/, '');
+    if (v === 'i') return i;
+    if (v === 'ui') return `${i}ュイ`;
+    return i + (SMALL_Y[v] || 'ャ');
+  }
+  if (c === 't' && vowel === 'i') return 'ティ';
+  if (c === 'd' && vowel === 'i') return 'ディ';
+  if (c === 't' && vowel === 'u') return 'トゥ';
+  if (c === 'd' && vowel === 'u') return 'ドゥ';
+  const row = KANA_ROWS[c] ?? KANA_ROWS[''];
+  if (vowel.length === 1) return row[VOWEL_IDX[vowel]];
+  if (vowel === 'ui') return `${row[2]}イ`;
+  if (vowel[0] === 'y') {
+    if (!c) return vowel === 'ye' ? 'イェ' : 'ヤ_ユ_ヨ'[VOWEL_IDX[vowel[1]]];
+    return row[1] + SMALL_Y[vowel[1]];
+  }
+  // w-гласные
+  if (!c) return vowel === 'wa' ? 'ワ' : `ウ${SMALL_V[vowel[1]]}`;
+  return row[2] + SMALL_V[vowel[1]];
+}
+
+/**
+ * Хангыль → катакана по японским правилам записи корейских имён. Возвращает варианты:
+ * начальные ㄱ/ㄷ/ㅂ/ㅈ слова пишут то звонко, то глухо (김 → キム, 지 → ジ).
+ */
+export function hangulToKatakana(s) {
+  const words = String(s || '').split(/[\s・･]+/u).filter(Boolean);
+  const conv = (word, devoice) => {
+    let out = '';
+    let first = true;
+    for (const ch of word) {
+      const code = ch.codePointAt(0) - 0xac00;
+      if (code < 0 || code > 11171) { out += ch; first = false; continue; }
+      let cons = H_INIT[Math.floor(code / 588)];
+      if (first && devoice) cons = { g: 'k', d: 't', b: 'p', j: 'ch' }[cons] ?? cons;
+      out += kanaSyllable(cons, H_VOW[Math.floor((code % 588) / 28)]) + H_FIN[code % 28];
+      first = false;
+    }
+    return out;
+  };
+  const voiced = words.map((w) => conv(w, false));
+  const devoiced = words.map((w) => conv(w, true));
+  return [...new Set([voiced.join(' '), devoiced.join(' ')])];
+}
+
+// ---------- имена из меток говорящих ----------
+// В японских [cc]-субтитрах у реплик есть метки «（グリード）». Если метка — катакана, которой
+// нет среди имён, но по звучанию она совпадает ровно с одним персонажем (Grid / Greed ↔ グリード,
+// Vantner ↔ ベントナー), добавляем её этому персонажу как ещё одно имя.
+
+const KATA_CONS = {};
+for (const [cons, row] of Object.entries(KANA_ROWS)) for (const k of row) KATA_CONS[k] = cons;
+Object.assign(KATA_CONS, {
+  シ: 's', チ: 's', ツ: 's', ジ: 's', ヂ: 's', ヅ: 's', ザ: 's', ズ: 's', ゼ: 's', ゾ: 's',
+  フ: 'p', ヴ: 'p', ン: 'n', ヤ: '', ユ: '', ヨ: '', ワ: '', ヲ: '',
+});
+
+/**
+ * Звучание имени: согласный «скелет» (классы звуков без гласных: «Greed» и «グリード» → «krt»)
+ * и цепочка гласных — для выбора, если скелет совпал у нескольких персонажей.
+ */
+function formsLatin(s) {
+  const x = String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, '');
+  const sk = (w) => collapse(w
+    .replace(/ph/g, 'f').replace(/th/g, 't').replace(/ng/g, 'n').replace(/x/g, 'ks')
+    .replace(/sh|ch|tz|ts|[jzc]/g, (m) => (m === 'c' ? 'k' : 's'))
+    .replace(/[aeiouyhw]/g, '').replace(/[kgq]/g, 'k').replace(/[td]/g, 't').replace(/[pbfv]/g, 'p').replace(/l/g, 'r'));
+  const vw = collapse(x.replace(/[^aeiou]/g, ''));
+  // Vantner → ベントナー: конечное r не произносится, Ashur → アシュール — произносится
+  return [...new Set([sk(x), sk(x.replace(/r$/, ''))])].map((k) => ({ sk: k, vw }));
+}
+
+function formKatakana(s) {
+  let sk = '';
+  let vw = '';
+  for (const k of s) {
+    const c = KATA_CONS[k];
+    if (c != null) sk += { g: 'k', d: 't', b: 'p', h: '' }[c] ?? c;
+    const small = 'ャュョ'.indexOf(k) >= 0 ? 'auo'['ャュョ'.indexOf(k)] : 'ァィゥェォ'.indexOf(k) >= 0 ? 'aiueo'['ァィゥェォ'.indexOf(k)] : null;
+    if (small) { vw = vw.slice(0, -1) + small; continue; }
+    if (k === 'ヤ' || k === 'ワ') vw += 'a';
+    else if (k === 'ユ' || k === 'ヴ') vw += 'u';
+    else if (k === 'ヨ' || k === 'ヲ') vw += 'o';
+    else for (const row of Object.values(KANA_ROWS)) if (row.includes(k)) { vw += 'aiueo'[row.indexOf(k)]; break; }
+    if ('ザジズゼゾ'.includes(k)) vw += 'aiueo'['ザジズゼゾ'.indexOf(k)];
+  }
+  return { sk: collapse(sk), vw: collapse(vw) };
+}
+
+function collapse(x) {
+  return x.replace(/(.)\1+/g, '$1');
+}
+
+function nameForms(ch) {
+  const out = [];
+  const addKata = (k) => {
+    out.push(formKatakana(k.replace(/[\s・･]/g, '')));
+    for (const p of k.split(/[\s・･]+/)) out.push(formKatakana(p));
+  };
+  const latin = (s, parts) => {
+    const clean = s.replace(/\([^)]*\)/g, '').trim();
+    out.push(...formsLatin(clean));
+    // По частям — только основное имя: в альтернативных «Blood Witch» часть «Blood» — не имя.
+    if (parts) for (const p of clean.split(/[\s'’-]+/)) if (p.length >= 3 && !LATIN_STOP.has(p.toLowerCase())) out.push(...formsLatin(p));
+  };
+  const sources = [ch.name, ch.japanese, ...(ch.synonyms || []), ...(ch.altNames || [])].filter(Boolean).map(String);
+  sources.forEach((s, i) => {
+    if (HANGUL_RE.test(s)) for (const k of hangulToKatakana(s)) addKata(k);
+    else if (CJK_RE.test(s)) for (const k of s.match(/[\p{Script=Katakana}ー・･]{2,}/gu) || []) addKata(k); // アシュール伯爵 → アシュール
+    else if (LATIN_RE.test(s)) latin(s, i === 0);
+  });
+  return out.filter((f) => f.sk.length >= 2);
+}
+
+/**
+ * Добавляет персонажам имена-катакану из меток говорящих: если метки нет среди имён, но по
+ * звучанию она совпадает ровно с одним персонажем (Grid / Greed ↔ グリード). Возвращает
+ * новый список персонажей; исходный не меняется.
+ */
+export function learnSpeakerNames(events, characters, matcher = buildMatcher(characters)) {
+  const labels = new Set();
+  for (const ev of events) for (const l of ev.speakers || []) labels.add(l.trim());
+  const bySkel = new Map();
+  for (const ch of characters) {
+    for (const f of nameForms(ch)) {
+      if (!bySkel.has(f.sk)) bySkel.set(f.sk, new Map());
+      const m = bySkel.get(f.sk);
+      if (!m.has(ch.id)) m.set(ch.id, { ch, vws: new Set() });
+      m.get(ch.id).vws.add(f.vw);
+    }
+  }
+  const learned = new Map();
+  for (const label of labels) {
+    if (!KATAKANA_ONLY_RE.test(label) || codeLen(label.replace(/[ー・･]/g, '')) < 2 || JP_GENERIC.has(label)) continue;
+    if (matchText(matcher, label).length) continue;
+    const { sk, vw } = formKatakana(label);
+    if (sk.length < 2 || !bySkel.has(sk)) continue;
+    let owners = [...bySkel.get(sk).values()];
+    if (owners.some((o) => !o.ch.past)) owners = owners.filter((o) => !o.ch.past);
+    if (owners.length > 1) owners = owners.filter((o) => o.vws.has(vw));
+    if (owners.length !== 1) continue;
+    const { id } = owners[0].ch;
+    if (!learned.has(id)) learned.set(id, []);
+    learned.get(id).push(label);
+  }
+  if (!learned.size) return characters;
+  return characters.map((c) => (learned.has(c.id) ? { ...c, altNames: [...(c.altNames || []), ...learned.get(c.id)] } : c));
+}
+
 /** Нормализация романизации для сопоставления персонажей Shikimori ↔ AniList. */
 export function romajiKey(s) {
   return (s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, '');
@@ -89,6 +258,13 @@ function ruStemPattern(word) {
   return `${escapeRe(w)}[а-яё]{0,3}`;
 }
 
+/** Ключ имени-катаканы без «ー»: разная запись долгих гласных — одно имя. */
+function kataKey(v) {
+  if (!KATAKANA_ONLY_RE.test(v)) return v;
+  const k = v.replace(/ー/g, '');
+  return codeLen(k) >= 2 ? k : v;
+}
+
 /**
  * characters: [{id, name, russian, japanese, synonyms[], altNames[], past?}]
  * Возвращает матчер с регэкспами по трём письменностям.
@@ -113,7 +289,8 @@ export function buildMatcher(characters) {
       add(owners[kind], tok, ch.id);
     };
     for (const s of sources) {
-      if (CJK_RE.test(s)) for (const v of variantsCjk(s)) put('cjk', v);
+      if (CJK_RE.test(s)) for (const v of variantsCjk(s)) put('cjk', kataKey(v));
+      if (HANGUL_RE.test(s)) for (const k of hangulToKatakana(s)) for (const v of variantsCjk(k)) put('cjk', kataKey(v));
       if (LATIN_RE.test(s)) for (const v of variantsLatin(s)) put('lat', v);
       if (CYR_RE.test(s)) for (const v of variantsCyr(s)) put('cyr', v.toLowerCase());
     }
@@ -130,8 +307,9 @@ export function buildMatcher(characters) {
   const cjkToks = [...tokenToId.cjk.keys()].sort(byLen);
   const latToks = [...tokenToId.lat.keys()].sort(byLen);
   const cyrToks = [...tokenToId.cyr.keys()].sort(byLen);
+  // Катакану ищем с необязательной «ー» после каждого знака: アイリン ↔ アイリーン.
   const cjkAlt = cjkToks.map((t) => (KATAKANA_ONLY_RE.test(t)
-    ? `(?<![\\p{Script=Katakana}ー])${escapeRe(t)}(?![\\p{Script=Katakana}ー])`
+    ? `(?<![\\p{Script=Katakana}ー])${[...t].map(escapeRe).join('ー?')}ー?(?![\\p{Script=Katakana}ー])`
     : escapeRe(t)));
   const re = {
     cjk: cjkAlt.length ? new RegExp(`(${cjkAlt.join('|')})`, 'gu') : null,
@@ -150,7 +328,7 @@ export function matchText(matcher, text) {
   const { re, tokenToId } = matcher;
   if (re.cjk && CJK_RE.test(text)) {
     for (const m of text.matchAll(re.cjk)) {
-      const id = tokenToId.cjk.get(m[1]);
+      const id = tokenToId.cjk.get(m[1]) ?? tokenToId.cjk.get(kataKey(m[1]));
       if (id != null && !found.has(id)) found.set(id, m[1]);
     }
   }

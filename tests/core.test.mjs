@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSubtitle, cleanText, speechIntervals } from '../extension/lib/subs.js';
-import { buildMatcher, matchText, findMentions, romajiKey } from '../extension/lib/names.js';
+import { buildMatcher, matchText, findMentions, romajiKey, learnSpeakerNames, hangulToKatakana } from '../extension/lib/names.js';
 import { episodeNumberFromName, pickCandidates, subtitleLabel } from '../extension/lib/episodes.js';
 import { relatedCharacters, stripSpoilers } from '../extension/lib/desc.js';
 import { pickPrune } from '../extension/lib/cache.js';
@@ -285,4 +285,37 @@ test('Сверка Shikimori ↔ AniList: латиница, иероглифы �
   assert.equal(m.get(3)?.id, 12);
   assert.equal(m.get(4)?.id, 13);
   assert.equal(m.has(5), false);
+});
+
+test('Корейские имена: хангыль → катакана, долгие гласные, имена из меток говорящих', () => {
+  // Данные «Во всеоружии: Сила артефактов» (Shikimori + AniList): японское имя — хангыль, ник — латиницей
+  const cast = [
+    { id: 1, name: 'Youngwoo Shin', russian: 'Ёну Син', japanese: '신 영우', synonyms: ['Grid'], altNames: ['신영우', 'Greed', 'Grid'] },
+    { id: 2, name: 'Yura', russian: 'Юра', japanese: '유라', synonyms: ['Yura'], altNames: ['유라', 'Blood Witch'] },
+    { id: 3, name: 'Irene Winston von Steim', russian: 'Ирэн', japanese: '아이린 윈스톤 폰 스테임', synonyms: [] },
+    { id: 4, name: 'Vantner', russian: 'Вантнер', japanese: '반트너', synonyms: [] },
+    { id: 5, name: 'Lord Ashur', russian: 'Лорд Ашур', japanese: 'アシュール伯爵', synonyms: [] },
+    { id: 6, name: 'Seria', russian: 'Сэриа', japanese: 'セリア', synonyms: [] },
+  ];
+  assert.deepEqual(hangulToKatakana('지슈카'), ['ジシュカ', 'チシュカ']);
+  assert.deepEqual(hangulToKatakana('유라'), ['ユラ']);
+  const m = buildMatcher(cast);
+  assert.deepEqual(matchText(m, 'ユラさん').map((x) => x.id), [2]);
+  assert.deepEqual(matchText(m, 'アイリーン様').map((x) => x.id), [3]); // 아이린 → アイリン ↔ アイリーン
+  assert.deepEqual(matchText(m, 'グリード'), []); // ника катаканой нет нигде
+
+  const ev = (speakers, text) => ({ start: 0, end: 1, text, speakers, speech: true });
+  const events = [ev(['グリード'], 'よし'), ev(['ベントナー'], 'ああ'), ev(['アシュルー'], 'ふん'),
+    ev(['ブラディ'], 'アイリーン様'), ev(['商人'], 'グリードさん'), ev(['アナウンサー'], 'さて')];
+  const learned = learnSpeakerNames(events, cast);
+  const lm = buildMatcher(learned);
+  assert.deepEqual(matchText(lm, 'グリードさん！').map((x) => x.id), [1]);
+  assert.deepEqual(matchText(lm, 'ベントナー').map((x) => x.id), [4]);
+  assert.deepEqual(matchText(lm, 'アシュルー伯爵').map((x) => x.id), [5]); // не Сэриа: гласные не те
+  assert.deepEqual(matchText(lm, 'ブラディ'), []); // «Blood Witch» — не повод
+  assert.deepEqual(matchText(lm, 'アナウンサー'), []);
+  assert.equal(cast[0].altNames.length, 3); // исходный список не тронут
+  const { mentions, speakers } = findMentions(events, lm);
+  assert.deepEqual(speakers.map((s) => s.id), [1, 4, 5]);
+  assert.deepEqual(mentions.map((x) => x.id), [3, 1]);
 });

@@ -2,7 +2,7 @@
 // хранение сдвигов, связь между вкладкой, плеером и offscreen-документом (VAD).
 
 import { parseSubtitle, speechIntervals } from './lib/subs.js';
-import { buildMatcher, findMentions } from './lib/names.js';
+import { buildMatcher, findMentions, learnSpeakerNames } from './lib/names.js';
 import { pickCandidates, subtitleLabel } from './lib/episodes.js';
 import { SETTINGS_DEFAULTS } from './lib/settings.js';
 import { cleanDescription, relatedCharacters } from './lib/desc.js';
@@ -13,7 +13,7 @@ import { matchAnilist } from './lib/match.js';
 const SHIKI = 'https://shikimori.io';
 const JIMAKU = 'https://jimaku.cc';
 const CLIENT_ID = 'kto-eto-anime-extension/0.1';
-const DATA_VERSION = 2; // поменять, если изменится формат подготовленных данных (2 — персонажи прошлых сезонов)
+const DATA_VERSION = 3; // поменять, если изменится формат подготовленных данных (2 — персонажи прошлых сезонов, 3 — хангыль и имена из меток говорящих)
 
 // ---------- утилиты ----------
 
@@ -399,7 +399,7 @@ async function saveOffset(malId, episode, dub, value, how) {
 
 async function prepareSubtitle({ name, text, url }, characters) {
   const { format, events } = parseSubtitle(text, name);
-  const matcher = buildMatcher(characters);
+  const matcher = buildMatcher(learnSpeakerNames(events, characters));
   const { mentions, speakers } = findMentions(events, matcher);
   return {
     v: DATA_VERSION,
@@ -516,7 +516,6 @@ async function knownCharacters(malId, episode) {
     const { characters } = cast;
     const seasonEps = shiki.episodes || shiki.episodesAired || anilist?.episodes || 0;
     let files = null;
-    let matcher = null;
     const filesOnce = async () => {
       if (files) return files;
       const entry = await jimakuFindEntry({
@@ -527,15 +526,14 @@ async function knownCharacters(malId, episode) {
       return files;
     };
     await pool(prevEpisodes, 3, async (ep) => {
-      const key = `seen:${malId}:${ep}`;
+      const key = `seen2:${malId}:${ep}`; // 2 — хангыль и имена из меток говорящих
       let ids = await cacheGet(key, 60 * DAY);
       if (!ids) {
         const cand = pickCandidates(await filesOnce(), ep, seasonEps)[0];
         if (!cand) { missing++; return; }
         try {
           const { events } = parseSubtitle(await downloadText(cand.url), cand.name);
-          matcher ||= buildMatcher(characters);
-          const { mentions, speakers } = findMentions(events, matcher);
+          const { mentions, speakers } = findMentions(events, buildMatcher(learnSpeakerNames(events, characters)));
           ids = [...new Set([...mentions, ...speakers].map((m) => m.id))];
           await cacheSet(key, ids);
         } catch (e) {
