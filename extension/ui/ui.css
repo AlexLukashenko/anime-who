@@ -48,6 +48,7 @@ a { color: var(--accent); }
 .preview-wrap { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
 .pv { display: inline-flex; gap: 9px; align-items: center; background: #0d0d13; border: 1px solid #2a2a36; border-radius: 10px; padding: 6px 12px 6px 6px; max-width: 100%; }
 .pv-ph { width: 38px; height: 50px; border-radius: 7px; flex: none; background: linear-gradient(160deg, #e48aa6, #8d5c9c); }
+img.pv-ph { object-fit: cover; background: #2a2a35; }
 .pv-tag { display: inline-block; font-size: 9.5px; padding: 0 5px; border-radius: 5px; background: rgba(255,255,255,.12); text-transform: uppercase; letter-spacing: .04em; }
 .pv-name { font-weight: 700; font-size: 14px; }
 .pv-sub, .pv-token { font-size: 11px; color: var(--muted); }

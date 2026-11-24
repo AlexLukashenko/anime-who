@@ -19,6 +19,7 @@
     showMain: true,
     showSupporting: true,
     showSpeakers: false,
+    noSpoilers: false,
     fPhoto: true,
     fRu: true,
     fJp: true,
@@ -62,6 +63,10 @@
   const lastShown = new Map();
   let muted = new Set();
   const images = new Map();
+  let knownIds = null; // режим без спойлеров: ID персонажей, знакомых к началу серии (null — ещё не знаем)
+  let knownInfo = null;
+  let knownLoading = false;
+  let card = null; // открытая карточка персонажа: { id, resume }
 
   let sync = { state: 'idle', observed: 0, vad: null, est: null };
   let port = null;
@@ -89,6 +94,16 @@
   function roleLabel(role) {
     return role === 'main' ? 'главный персонаж' : 'второстепенный';
   }
+
+  /** Пометка на баннере: род — по данным AniList, если он известен. */
+  function tagLabel(kind, c) {
+    if (kind === 'speaker') return 'говорит';
+    if (c?.gender === 'f') return 'упомянута';
+    if (c?.gender === 'm') return 'упомянут';
+    return 'упомянут(а)';
+  }
+
+  const esc = (x) => String(x ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 
   function charById(id) {
     return data?.byId?.get(id);
@@ -155,8 +170,11 @@
     offset = data.offset?.value ?? null;
     offsetHow = offset != null ? data.offset.source : null;
     lastSubT = null;
+    knownIds = null;
+    knownInfo = null;
     ensureUi();
     renderPanel();
+    if (settings.noSpoilers) loadKnown();
     if (offset == null) { offset = Number(settings.startDelay) || 0; offsetHow = 'default'; }
     if (data.status !== 'ok') toast(data.message || 'Субтитры не найдены — доступна только панель персонажей (Alt+Shift+C).');
     else toast(`«${data.anime.title}», ${data.anime.episode} серия · задержка субтитров ${fmtOffset(offset)}`, 4000);
@@ -176,6 +194,9 @@
     manualOverride = false;
     lastSubT = null;
     lastShown.clear();
+    knownIds = null;
+    knownInfo = null;
+    closeCard({ resume: false });
     sync = { state: 'idle', observed: 0, vad: null, est: null };
     tabCaptureMode = false;
     silentSeconds = 0;
@@ -431,6 +452,29 @@
   .item.muted { opacity: .4; }
   .eye { background: none; border: 0; color: #fff; opacity: .5; cursor: pointer; font-size: 1em; padding: 4px; }
   .eye:hover { opacity: 1; }
+  .banner { pointer-events: auto; cursor: pointer; }
+  .banner:hover { border-color: rgba(255,255,255,.3); }
+  .past { font-size: .78em; opacity: .6; margin-top: 2px; }
+  .open-card { cursor: pointer; }
+  .name.open-card:hover { text-decoration: underline; text-underline-offset: 2px; }
+  .ext { color: inherit; opacity: .45; text-decoration: none; font-size: .85em; margin-left: 4px; }
+  .ext:hover { opacity: 1; }
+  .hidden-note { font-size: .78em; opacity: .55; margin: 10px 6px 0; line-height: 1.4; }
+  .card-bg { position: absolute; inset: 0; background: rgba(0,0,0,.55); pointer-events: auto; display: grid; place-items: center; animation: in .2s ease-out; }
+  .card { position: relative; width: min(560px, 86%); max-height: 84%; overflow: auto; display: flex; gap: 16px; padding: 16px;
+    background: rgba(14,14,20,.97); border: 1px solid rgba(255,255,255,.1); border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,.6); }
+  .card .big { width: 8.5em; height: 11.5em; border-radius: 10px; object-fit: cover; flex: none; background: #2a2a35; }
+  .card .body { flex: 1; min-width: 0; }
+  .card .name { font-size: 1.35em; padding-right: 24px; }
+  .card .desc { -webkit-line-clamp: unset; display: block; max-width: none; font-size: .86em; margin-top: 8px; }
+  .card .seyu { font-size: .8em; opacity: .65; margin-top: 6px; }
+  .card .rel { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .card .chip { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.12); color: #fff; border-radius: 999px;
+    padding: 2px 10px; font: inherit; font-size: .8em; cursor: pointer; text-decoration: none; }
+  .card .chip:hover { background: rgba(255,255,255,.2); }
+  .card .foot { margin-top: 12px; font-size: .82em; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .card .warn { opacity: .5; font-size: .9em; }
+  .card .close { top: 10px; right: 10px; }
   .toast { position: absolute; left: 50%; bottom: 70px; transform: translateX(-50%); max-width: 70%;
     background: rgba(14,14,20,.9); padding: 8px 14px; border-radius: 10px; font-size: .9em; text-align: center;
     animation: in .3s ease-out; transition: opacity .5s; }
@@ -462,6 +506,11 @@
     root.querySelector('.close').addEventListener('click', () => togglePanel(false));
     els.controls.addEventListener('click', onControl);
     els.list.addEventListener('click', onListClick);
+    els.stack.addEventListener('click', (e) => {
+      const b = e.target.closest('.banner[data-id]');
+      if (b) openCard(Number(b.dataset.id));
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && card) { e.stopPropagation(); closeCard(); } }, true);
     placeHost();
     applyPosition();
     let hideTimer = null;
@@ -550,7 +599,7 @@
     if (!names.length) names.push(c.ru || c.romaji || c.jp);
     const [primary, ...rest] = names;
     const sub = [...rest, settings.fRole ? roleLabel(c.role) : null].filter(Boolean).join(' · ');
-    return { primary, sub };
+    return { primary, sub, past: c.past ? `из прошлых сезонов${c.season ? ` · ${c.season}` : ''}` : '' };
   }
 
   async function showBanner(ev, kind) {
@@ -563,18 +612,21 @@
     if (prev != null && Math.abs(v - prev) < cooldown) return;
     lastShown.set(key, v);
     ensureUi();
-    const { primary, sub } = nameParts(c);
+    const { primary, sub, past } = nameParts(c);
     const el = document.createElement('div');
     el.className = 'banner';
+    el.dataset.id = c.id;
+    el.title = 'Подробнее о персонаже (видео встанет на паузу)';
     el.innerHTML = `${settings.fPhoto ? '<div class="ph"></div>' : ''}<div class="text">
       ${settings.fTag ? `<div class="tag ${kind}"></div>` : ''}<div class="name"></div>
-      ${sub ? '<div class="sub"></div>' : ''}
+      ${sub ? '<div class="sub"></div>' : ''}${past ? '<div class="past"></div>' : ''}
       ${settings.fToken && ev.token ? '<div class="token"></div>' : ''}
       ${settings.fDesc && c.desc ? '<div class="desc"></div>' : ''}</div>`;
     const set = (sel, text) => { const n = el.querySelector(sel); if (n) n.textContent = text; };
-    set('.tag', kind === 'speaker' ? 'говорит' : 'упомянут(а)');
+    set('.tag', tagLabel(kind, c));
     set('.name', primary);
     set('.sub', sub);
+    set('.past', past);
     set('.token', `в реплике: «${ev.token}»`);
     set('.desc', c.desc);
     els.stack.appendChild(el);
@@ -607,10 +659,11 @@
     if (!data) return 'Загружаю данные…';
     const parts = [];
     if (data.subtitle) {
-      parts.push(`Субтитры: ${data.subtitle.custom ? 'свой файл' : 'Jimaku'} — ${data.subtitle.name.length > 60 ? `${data.subtitle.name.slice(0, 57)}…` : data.subtitle.name}`);
+      const label = data.subtitle.custom ? 'свой файл' : `Jimaku · ${data.subtitle.label || data.subtitle.format?.toUpperCase() || 'файл'}`;
+      parts.push(`Субтитры: <span title="${esc(data.subtitle.name)}">${esc(label)}</span>`);
       parts.push(`Упоминаний в серии: ${data.mentions.length}`);
     } else {
-      parts.push(data.message || 'Субтитров нет — баннеры недоступны, панель работает.');
+      parts.push(esc(data.message || 'Субтитров нет — баннеры недоступны, панель работает.'));
     }
     if (data.subtitle) {
       const how = {
@@ -646,19 +699,36 @@
     const seen = new Map();
     if (now != null) for (const m of data.mentions) { if (m.t <= now) seen.set(m.id, m.t); else break; }
     const recent = [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => charById(id)).filter(Boolean);
-    const rest = data.characters.filter((c) => !seen.has(c.id)).sort((a, b) => (a.role === b.role ? 0 : a.role === 'main' ? -1 : 1));
+    // Персонажи прошлых сезонов — только если их назвали в этой серии
+    let rest = data.characters.filter((c) => !seen.has(c.id) && !c.past).sort((a, b) => (a.role === b.role ? 0 : a.role === 'main' ? -1 : 1));
+    let hiddenNote = '';
+    if (settings.noSpoilers) {
+      if (!knownIds) {
+        hiddenNote = knownLoading || !knownInfo ? 'Без спойлеров: проверяю прошлые серии…' : 'Без спойлеров: не удалось проверить прошлые серии.';
+        rest = [];
+      } else {
+        const before = rest.length;
+        rest = rest.filter((c) => knownIds.has(c.id));
+        const hidden = before - rest.length;
+        if (hidden) hiddenNote = `Без спойлеров: скрыто ${hidden} — их ещё не называли ни в этой серии, ни раньше.`;
+        if (knownInfo?.missing) hiddenNote += `${hiddenNote ? ' ' : 'Без спойлеров: '}Для ${knownInfo.missing} прошлых серий нет субтитров, их персонажи могут быть скрыты.`;
+      }
+    }
     const item = (c) => `<div class="item ${muted.has(c.id) ? 'muted' : ''} ${roleAllowed(c) ? '' : 'hidden-role'}" data-id="${c.id}">
-        ${settings.fPhoto ? `<a class="pic" data-open="${shikiUrl(c)}" href="${shikiUrl(c)}" target="_blank" rel="noopener noreferrer" title="Открыть на Shikimori"><div class="ph" data-img="${c.id}"></div></a>` : ''}
-        <div class="meta"><a class="name link" data-open="${shikiUrl(c)}" href="${shikiUrl(c)}" target="_blank" rel="noopener noreferrer" title="Открыть на Shikimori в новой вкладке"></a>
-          <div class="sub"></div>${settings.fDesc && c.desc ? '<div class="desc"></div>' : ''}${roleAllowed(c) ? '' : '<div class="note">не показывается в баннерах</div>'}</div>
+        ${settings.fPhoto ? `<a class="pic open-card" data-card="${c.id}" title="Подробнее"><div class="ph" data-img="${c.id}"></div></a>` : ''}
+        <div class="meta"><span class="name open-card" data-card="${c.id}" title="Подробнее"></span><a class="ext" data-open="${shikiUrl(c)}" href="${shikiUrl(c)}" target="_blank" rel="noopener noreferrer" title="Открыть на Shikimori в новой вкладке">↗</a>
+          <div class="sub"></div>${c.past ? '<div class="past"></div>' : ''}${settings.fDesc && c.desc ? '<div class="desc"></div>' : ''}${roleAllowed(c) ? '' : '<div class="note">не показывается в баннерах</div>'}</div>
         <button class="eye" data-mute="${c.id}" title="${muted.has(c.id) ? 'Снова показывать' : 'Не показывать баннеры'}">${muted.has(c.id) ? '◌' : '◉'}</button></div>`;
     els.list.innerHTML = (recent.length ? `<div class="section">Упоминались в этой серии</div>${recent.map(item).join('')}` : '')
-      + `<div class="section">${recent.length ? 'Остальные' : 'Персонажи'}</div>${rest.map(item).join('')}`;
+      + (rest.length ? `<div class="section">${recent.length ? 'Остальные' : 'Персонажи'}</div>${rest.map(item).join('')}` : '')
+      + (hiddenNote ? `<div class="hidden-note">${esc(hiddenNote)}</div>` : '');
     for (const node of els.list.querySelectorAll('.item')) {
       const c = charById(Number(node.dataset.id));
-      const { primary, sub } = nameParts(c);
+      const { primary, sub, past } = nameParts(c);
       node.querySelector('.name').textContent = primary;
       node.querySelector('.sub').textContent = sub;
+      const pn = node.querySelector('.past');
+      if (pn) pn.textContent = past;
       const d = node.querySelector('.desc');
       if (d) d.textContent = c.desc;
       if (settings.fPhoto) imageFor(c).then((url) => {
@@ -690,6 +760,8 @@
   }
 
   async function onListClick(e) {
+    const cardLink = e.target.closest('[data-card]');
+    if (cardLink) { openCard(Number(cardLink.dataset.card)); return; }
     const link = e.target.closest('[data-open]');
     if (link) {
       // Новая вкладка рядом с текущей — через расширение, чтобы плеер не мог помешать
@@ -704,6 +776,111 @@
     if (muted.has(id)) muted.delete(id); else muted.add(id);
     await chrome.storage.local.set({ [`muted:${data.anime.malId}`]: [...muted] });
     renderPanel();
+  }
+
+  // ---------- режим без спойлеров ----------
+
+  async function loadKnown() {
+    if (knownLoading || !data) return;
+    knownLoading = true;
+    renderPanel();
+    const forData = data;
+    const r = await send({ type: 'known-characters', episode: data.anime?.episode });
+    knownLoading = false;
+    if (data !== forData) return; // пока проверяли, сменилась серия
+    knownInfo = r || { known: null };
+    knownIds = r?.known ? new Set(r.known) : null;
+    renderPanel();
+  }
+
+  // ---------- карточка персонажа ----------
+
+  async function openCard(id) {
+    const c = charById(id);
+    if (!c) return;
+    ensureUi();
+    const resume = card ? card.resume : !!(video && !video.paused);
+    if (video && !video.paused) video.pause();
+    closeCard({ resume: false });
+    card = { id, resume };
+    const { primary, sub, past } = nameParts({ ...c });
+    const bg = document.createElement('div');
+    bg.className = 'card-bg';
+    bg.innerHTML = `<div class="card" role="dialog" aria-label="Персонаж">
+      <div class="ph big"></div>
+      <div class="body"><button class="close" title="Закрыть (Esc)">×</button>
+        <div class="name"></div><div class="sub"></div>${past ? '<div class="past"></div>' : ''}
+        <div class="seyu" hidden></div>
+        <div class="desc">${c.desc ? '' : 'Загружаю описание…'}</div>
+        <div class="rel" hidden></div>
+        <div class="foot"><a class="chip" data-open="${shikiUrl(c)}" href="${shikiUrl(c)}" target="_blank" rel="noopener noreferrer">Открыть на Shikimori ↗</a>
+          <span class="warn">описание может спойлерить</span></div>
+      </div></div>`;
+    const q = (sel) => bg.querySelector(sel);
+    const others = [c.jp, c.romaji].filter((x) => x && x !== primary);
+    q('.name').textContent = primary;
+    q('.sub').textContent = [...new Set([...others, roleLabel(c.role)])].join(' · ') || sub;
+    if (past) q('.past').textContent = past;
+    if (c.desc) q('.desc').textContent = c.desc;
+    if (c.seiyu?.length) { q('.seyu').hidden = false; q('.seyu').textContent = `Сэйю: ${c.seiyu.join(', ')}`; }
+    bg.addEventListener('click', (e) => {
+      if (e.target === bg || e.target.closest('.close')) { closeCard(); return; }
+      const rel = e.target.closest('[data-card]');
+      if (rel) { openCard(Number(rel.dataset.card)); return; }
+      const link = e.target.closest('[data-open]');
+      if (link) {
+        e.preventDefault();
+        send({ type: 'open-url', url: link.dataset.open }).then((r) => { if (!r?.ok) window.open(link.dataset.open, '_blank', 'noopener'); });
+      }
+    });
+    els.wrap.appendChild(bg);
+    card.el = bg;
+    imageFor(c).then((url) => {
+      if (!url || card?.el !== bg) return;
+      const img = document.createElement('img');
+      img.className = 'big';
+      img.src = url;
+      img.alt = '';
+      q('.ph.big')?.replaceWith(img);
+    });
+    const r = await send({ type: 'character-card', id });
+    if (card?.el !== bg) return;
+    q('.card').dataset.loaded = r?.card ? 'ok' : 'error';
+    const info = r?.card;
+    if (!info) { if (!c.desc) q('.desc').textContent = 'Описание не загрузилось.'; return; }
+    if (info.img) {
+      send({ type: 'image', url: info.img }).then((x) => {
+        const big = q('.big');
+        if (!x?.dataUrl || card?.el !== bg || !big) return;
+        const img = document.createElement('img');
+        img.className = 'big';
+        img.src = x.dataUrl;
+        img.alt = '';
+        big.replaceWith(img);
+      });
+    }
+    if (info.desc) q('.desc').textContent = info.desc;
+    else if (!c.desc) q('.desc').textContent = 'На Shikimori нет описания.';
+
+    if (info.related?.length) {
+      const relEl = q('.rel');
+      relEl.hidden = false;
+      relEl.innerHTML = info.related.map((x) => {
+        const inData = charById(x.id);
+        const name = esc(inData ? nameParts(inData).primary : x.name || `#${x.id}`);
+        return inData
+          ? `<button class="chip" data-card="${x.id}">${name}</button>`
+          : `<a class="chip" data-open="https://shikimori.io/characters/${x.id}" href="https://shikimori.io/characters/${x.id}" target="_blank" rel="noopener noreferrer">${name} ↗</a>`;
+      }).join('');
+    }
+  }
+
+  function closeCard({ resume = true } = {}) {
+    if (!card) return;
+    card.el?.remove();
+    const shouldResume = resume && card.resume;
+    card = null;
+    if (shouldResume && video?.paused) video.play().catch(() => {});
   }
 
   function resync() {
@@ -747,6 +924,7 @@
     if (!data) return; // этот фрейм не плеер
     // новая задержка по умолчанию сразу применяется, если её ещё не меняли для этой серии/озвучки
     if ('startDelay' in changes && offsetHow === 'default') setOffset(Number(settings.startDelay) || 0, 'default', { save: false });
+    if ('noSpoilers' in changes && settings.noSpoilers && !knownIds) loadKnown();
     if ('autoSync' in changes) {
       if (settings.autoSync) ensureAudioSync();
       else if (!oneShot) stopListening();

@@ -67,28 +67,54 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // ---------- пример баннера ----------
 
-const SAMPLE = {
-  ru: 'Маомао', jp: '猫猫', romaji: 'Maomao', role: 'main', token: '猫猫',
+// Пока серия не определилась — Маомао с заглушкой вместо фото; потом — настоящий персонаж этой серии.
+const FALLBACK_SAMPLE = {
+  ru: 'Маомао', jp: '猫猫', romaji: 'Maomao', role: 'main', token: '猫猫', gender: 'f',
   desc: 'Девушка-фармацевт, похищенная и проданная во дворец. Разбирается в ядах и лекарствах лучше придворных лекарей.',
 };
+let sample = FALLBACK_SAMPLE;
+let samplePhoto = null; // { img, dataUrl }
+
+function tagFor(c) {
+  return c.gender === 'f' ? 'упомянута' : c.gender === 'm' ? 'упомянут' : 'упомянут(а)';
+}
+
+function setSample(next) {
+  const s = next?.ru ? next : FALLBACK_SAMPLE;
+  if (s.img && samplePhoto?.img !== s.img) {
+    samplePhoto = { img: s.img, dataUrl: null };
+    chrome.runtime.sendMessage({ type: 'image', url: s.img }).then((r) => {
+      if (samplePhoto?.img !== s.img) return;
+      samplePhoto.dataUrl = r?.dataUrl || null;
+      renderPreview();
+    }).catch(() => {});
+  }
+  if (s === sample || (s.id && s.id === sample.id)) return;
+  sample = s;
+  renderPreview();
+}
 
 function renderPreview() {
   const s = settings;
+  const c = sample;
   const names = [];
-  if (s.fRu) names.push(SAMPLE.ru);
-  if (s.fJp) names.push(SAMPLE.jp);
-  if (s.fRomaji) names.push(SAMPLE.romaji);
-  if (!names.length) names.push(SAMPLE.ru);
+  if (s.fRu && c.ru) names.push(c.ru);
+  if (s.fJp && c.jp) names.push(c.jp);
+  if (s.fRomaji && c.romaji && c.romaji !== c.ru) names.push(c.romaji);
+  if (!names.length) names.push(c.ru || c.romaji || c.jp);
   const [primary, ...rest] = names;
-  const sub = [...rest, s.fRole ? 'главный персонаж' : null].filter(Boolean).join(' · ');
+  const sub = [...rest, s.fRole ? (c.role === 'main' ? 'главный персонаж' : 'второстепенный') : null].filter(Boolean).join(' · ');
+  const photo = c.img && samplePhoto?.img === c.img ? samplePhoto.dataUrl : null;
   const box = $('preview');
-  box.innerHTML = `<div class="pv">${s.fPhoto ? '<div class="pv-ph"></div>' : ''}<div>
-    ${s.fTag ? '<div class="pv-tag">упомянут(а)</div>' : ''}<div class="pv-name"></div>
-    ${sub ? '<div class="pv-sub"></div>' : ''}${s.fToken ? '<div class="pv-token"></div>' : ''}${s.fDesc ? '<div class="pv-desc"></div>' : ''}</div></div>`;
+  box.innerHTML = `<div class="pv">${s.fPhoto ? (photo ? '<img class="pv-ph" alt="">' : '<div class="pv-ph"></div>') : ''}<div>
+    ${s.fTag ? '<div class="pv-tag"></div>' : ''}<div class="pv-name"></div>
+    ${sub ? '<div class="pv-sub"></div>' : ''}${s.fToken && c.token ? '<div class="pv-token"></div>' : ''}${s.fDesc && c.desc ? '<div class="pv-desc"></div>' : ''}</div></div>`;
+  if (photo) box.querySelector('img.pv-ph').src = photo;
+  if (s.fTag) box.querySelector('.pv-tag').textContent = tagFor(c);
   box.querySelector('.pv-name').textContent = primary;
   if (sub) box.querySelector('.pv-sub').textContent = sub;
-  if (s.fToken) box.querySelector('.pv-token').textContent = `в реплике: «${SAMPLE.token}»`;
-  if (s.fDesc) box.querySelector('.pv-desc').textContent = SAMPLE.desc;
+  if (s.fToken && c.token) box.querySelector('.pv-token').textContent = `в реплике: «${c.token}»`;
+  if (s.fDesc && c.desc) box.querySelector('.pv-desc').textContent = c.desc;
 }
 
 // ---------- вкладка «Серия» ----------
@@ -98,6 +124,7 @@ async function refresh() {
   settings = { ...SETTINGS_DEFAULTS, ...(st?.settings || {}) };
   applySettingsToForm();
   const info = st?.info || {};
+  setSample(info.sample);
   if (!info.site && !info.malId) {
     $('unsupported').hidden = false;
     $('main').hidden = true;

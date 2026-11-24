@@ -3,7 +3,7 @@
   "name": "Кто это? — персонажи аниме",
   "short_name": "Кто это?",
   "description": "Показывает фото и имя персонажа аниме, когда о нём говорят в серии. YummyAnime (все плееры), DreamCast и другие сайты.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

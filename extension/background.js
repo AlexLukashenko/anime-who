@@ -3,15 +3,16 @@
 
 import { parseSubtitle, speechIntervals } from './lib/subs.js';
 import { buildMatcher, findMentions, romajiKey } from './lib/names.js';
-import { pickCandidates } from './lib/episodes.js';
+import { pickCandidates, subtitleLabel } from './lib/episodes.js';
 import { SETTINGS_DEFAULTS } from './lib/settings.js';
-import { cleanDescription } from './lib/desc.js';
+import { cleanDescription, relatedCharacters } from './lib/desc.js';
 import { parseAnimeRef } from './lib/refs.js';
+import { pickPrune } from './lib/cache.js';
 
 const SHIKI = 'https://shikimori.io';
 const JIMAKU = 'https://jimaku.cc';
 const CLIENT_ID = 'kto-eto-anime-extension/0.1';
-const DATA_VERSION = 1; // поменять, если изменится формат подготовленных данных
+const DATA_VERSION = 2; // поменять, если изменится формат подготовленных данных (2 — персонажи прошлых сезонов)
 
 // ---------- утилиты ----------
 
@@ -61,12 +62,13 @@ const DAY = 24 * HOUR;
 const SHIKI_QUERY = `query($ids: String!) {
   animes(ids: $ids, limit: 1) {
     id malId name russian japanese english synonyms episodes episodesAired kind
+    related { relationKind anime { id malId } }
     characterRoles { rolesEn character { id name russian japanese synonyms description poster { previewUrl mainUrl } } }
   }
 }`;
 
 async function loadShikimori(malId) {
-  const key = `shiki2:${malId}`; // 2 — с описаниями
+  const key = `shiki3:${malId}`; // 2 — с описаниями, 3 — со ссылками на приквелы
   const cached = await cacheGet(key, 7 * DAY);
   if (cached) return cached;
   const res = await fetchWithTimeout(`${SHIKI}/api/graphql`, {
@@ -99,6 +101,8 @@ async function loadShikimori(malId) {
     episodes: a.episodes || 0,
     episodesAired: a.episodesAired || 0,
     kind: a.kind,
+    prequels: (a.related || []).filter((r) => r.relationKind === 'prequel' && r.anime)
+      .map((r) => Number(r.anime.malId || r.anime.id)),
     characters,
   };
   await cacheSet(key, value);
@@ -150,12 +154,14 @@ function pageKey(url) {
 const ANILIST_QUERY = `query($mal: Int) {
   Media(idMal: $mal, type: ANIME) {
     id episodes title { romaji english native }
-    characters(perPage: 50, sort: [ROLE, RELEVANCE]) { edges { role node { id name { full native alternative } } } }
+    characters(perPage: 50, sort: [ROLE, RELEVANCE]) {
+      edges { role voiceActors(language: JAPANESE, sort: [RELEVANCE]) { name { full native } } node { id gender name { full native alternative } } }
+    }
   }
 }`;
 
 async function loadAnilist(malId) {
-  const key = `anilist:${malId}`;
+  const key = `anilist3:${malId}`; // 2 — с полом персонажа, 3 — с японскими сэйю
   const cached = await cacheGet(key, 7 * DAY);
   if (cached) return cached;
   try {
@@ -175,6 +181,8 @@ async function loadAnilist(malId) {
         full: e.node.name.full,
         native: e.node.name.native,
         alternative: e.node.name.alternative || [],
+        gender: e.node.gender || null,
+        seiyu: (e.voiceActors || []).slice(0, 2).map((v) => [v.name.native, v.name.full].filter(Boolean).join(' · ')),
       })),
     };
     await cacheSet(key, value);
@@ -185,8 +193,16 @@ async function loadAnilist(malId) {
   }
 }
 
+/** AniList: «Female», «Male», «Non-binary», произвольный текст или null → f | m | null. */
+function genderOf(g) {
+  const x = String(g || '').toLowerCase();
+  if (x === 'female') return 'f';
+  if (x === 'male') return 'm';
+  return null;
+}
+
 function mergeCharacters(shiki, anilist) {
-  if (!anilist) return shiki.characters.map((c) => ({ ...c, altNames: [] }));
+  if (!anilist) return shiki.characters.map((c) => ({ ...c, altNames: [], gender: null, seiyu: [] }));
   const index = new Map();
   for (const ac of anilist.characters) {
     for (const n of [ac.full, ...ac.alternative]) {
@@ -201,8 +217,42 @@ function mergeCharacters(shiki, anilist) {
       if (match) break;
     }
     const altNames = match ? [match.native, ...match.alternative].filter(Boolean) : [];
-    return { ...c, altNames };
+    return { ...c, altNames, gender: genderOf(match?.gender), seiyu: match?.seiyu || [] };
   });
+}
+
+// ---------- прошлые сезоны ----------
+
+/**
+ * Персонажи приквелов (до 4 сезонов назад). Возвращает тех, кого нет в текущем
+ * сезоне, — с пометкой past, и все ID персонажей прошлых сезонов (для режима без спойлеров).
+ */
+async function loadPastSeasons(shiki) {
+  const currentIds = new Set(shiki.characters.map((c) => c.id));
+  const past = new Map();
+  const allIds = new Set();
+  const visited = new Set([shiki.malId]);
+  let queue = [...(shiki.prequels || [])];
+  for (let depth = 0; depth < 4 && queue.length; depth++) {
+    const next = [];
+    for (const malId of queue) {
+      if (visited.has(malId)) continue;
+      visited.add(malId);
+      try {
+        const prev = await loadShikimori(malId);
+        const merged = mergeCharacters(prev, await loadAnilist(malId));
+        for (const c of merged) {
+          allIds.add(c.id);
+          if (!currentIds.has(c.id) && !past.has(c.id)) past.set(c.id, { ...c, past: true, season: prev.russian || prev.name });
+        }
+        next.push(...(prev.prequels || []));
+      } catch (e) {
+        console.warn('Не удалось загрузить прошлый сезон', malId, e);
+      }
+    }
+    queue = next;
+  }
+  return { characters: [...past.values()], allIds };
 }
 
 // ---------- Jimaku ----------
@@ -337,7 +387,7 @@ async function prepareSubtitle({ name, text, url }, characters) {
   const { mentions, speakers } = findMentions(events, matcher);
   return {
     v: DATA_VERSION,
-    subtitle: { name, url: url || null, format, lines: events.length },
+    subtitle: { name, label: subtitleLabel(name), url: url || null, format, lines: events.length },
     speech: speechIntervals(events),
     mentions,
     speakers,
@@ -349,12 +399,16 @@ async function buildEpisode(info, episode) {
   const malId = info.malId;
   const shiki = await loadShikimori(malId);
   const anilist = await loadAnilist(malId);
-  const characters = mergeCharacters(shiki, anilist);
+  const pastSeasons = await loadPastSeasons(shiki);
+  const characters = [...mergeCharacters(shiki, anilist), ...pastSeasons.characters];
   const seasonEps = shiki.episodes || shiki.episodesAired || anilist?.episodes || 0;
 
   const result = {
     anime: { malId, title: shiki.russian || shiki.name, name: shiki.name, japanese: shiki.japanese, episode },
-    characters: characters.map((c) => ({ id: c.id, ru: c.russian || c.name, romaji: c.name, jp: c.japanese, role: c.role, img: c.img, desc: c.desc || '' })),
+    characters: characters.map((c) => ({
+      id: c.id, ru: c.russian || c.name, romaji: c.name, jp: c.japanese, role: c.role, img: c.img, desc: c.desc || '',
+      gender: c.gender || null, seiyu: c.seiyu || [], ...(c.past ? { past: true, season: c.season } : {}),
+    })),
     candidates: [],
     subtitle: null,
     speech: [],
@@ -390,6 +444,7 @@ async function buildEpisode(info, episode) {
     const custom = stored[customKey].value;
     Object.assign(result, await prepareSubtitle({ name: custom.name, text: custom.text }, characters));
     result.subtitle.custom = true;
+    result.subtitle.label = 'свой файл';
     return result;
   }
 
@@ -417,6 +472,102 @@ async function buildEpisode(info, episode) {
     ? `На Jimaku нет японских субтитров для ${episode}-й серии. Можно загрузить свой файл в окне расширения.`
     : 'Этого аниме нет на Jimaku. Можно загрузить свой файл субтитров в окне расширения.';
   return result;
+}
+
+// ---------- режим без спойлеров: кого зритель уже видел ----------
+
+async function pool(items, limit, fn) {
+  const queue = [...items];
+  const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    while (queue.length) await fn(queue.shift());
+  });
+  await Promise.all(workers);
+}
+
+/**
+ * «Знакомые» персонажи к началу серии: все из прошлых сезонов и все, кого называли
+ * в субтитрах прошлых серий этого сезона. Кого называют в текущей серии, плеер добавляет сам.
+ */
+async function knownCharacters(malId, episode) {
+  const settings = await getSettings();
+  const shiki = await loadShikimori(malId);
+  const anilist = await loadAnilist(malId);
+  const pastSeasons = await loadPastSeasons(shiki);
+  const known = new Set(pastSeasons.allIds);
+  let checked = 0;
+  let missing = 0;
+  const prevEpisodes = Array.from({ length: Math.max(0, Math.min(episode - 1, 200)) }, (_, i) => i + 1);
+  if (prevEpisodes.length) {
+    const characters = [...mergeCharacters(shiki, anilist), ...pastSeasons.characters];
+    const seasonEps = shiki.episodes || shiki.episodesAired || anilist?.episodes || 0;
+    let files = null;
+    let matcher = null;
+    const filesOnce = async () => {
+      if (files) return files;
+      const entry = await jimakuFindEntry({
+        anilistId: anilist?.id,
+        names: [shiki.name, shiki.japanese, shiki.english, anilist?.title?.romaji, anilist?.title?.native, anilist?.title?.english],
+      }, settings.jimakuKey).catch(() => null);
+      files = entry ? await jimakuFiles(entry.id, settings.jimakuKey).catch(() => []) : [];
+      return files;
+    };
+    await pool(prevEpisodes, 3, async (ep) => {
+      const key = `seen:${malId}:${ep}`;
+      let ids = await cacheGet(key, 60 * DAY);
+      if (!ids) {
+        const cand = pickCandidates(await filesOnce(), ep, seasonEps)[0];
+        if (!cand) { missing++; return; }
+        try {
+          const { events } = parseSubtitle(await downloadText(cand.url), cand.name);
+          matcher ||= buildMatcher(characters);
+          const { mentions, speakers } = findMentions(events, matcher);
+          ids = [...new Set([...mentions, ...speakers].map((m) => m.id))];
+          await cacheSet(key, ids);
+        } catch (e) {
+          console.warn('Не удалось проверить серию', ep, e);
+          missing++;
+          return;
+        }
+      }
+      checked++;
+      for (const id of ids) known.add(id);
+    });
+  }
+  return { known: [...known], checked, missing };
+}
+
+// ---------- карточка персонажа ----------
+
+async function characterCard(id) {
+  const key = `card2:${id}`; // 2 — без сэйю (их берём из AniList)
+  const cached = await cacheGet(key, 7 * DAY);
+  if (cached) return cached;
+  const res = await fetchWithTimeout(`${SHIKI}/api/characters/${Number(id)}`, { headers: { Accept: 'application/json' } });
+  const c = await res.json();
+  const img = c.image?.original && !/missing/.test(c.image.original) ? new URL(c.image.original, SHIKI).href : null;
+  const value = {
+    id: Number(id),
+    ru: c.russian || c.name,
+    romaji: c.name,
+    jp: c.japanese,
+    img,
+    desc: cleanDescription(c.description, 900),
+    related: relatedCharacters(c.description).filter((r) => r.id !== Number(id)).slice(0, 12),
+  };
+  await cacheSet(key, value);
+  return value;
+}
+
+// ---------- уборка кеша ----------
+
+let lastPrune = 0;
+async function pruneCache({ force = false } = {}) {
+  if (!force && Date.now() - lastPrune < HOUR) return 0;
+  lastPrune = Date.now();
+  const all = await chrome.storage.local.get(null);
+  const keys = pickPrune(all, Date.now());
+  if (keys.length) await chrome.storage.local.remove(keys);
+  return keys.length;
 }
 
 // ---------- состояние вкладок ----------
@@ -487,6 +638,17 @@ async function imageDataUrl(url) {
   imageCache.set(url, dataUrl);
   if (imageCache.size > 300) imageCache.delete(imageCache.keys().next().value);
   return dataUrl;
+}
+
+/** Персонаж для примера баннера в настройках: главный герой, которого чаще всего называют в серии. */
+function sampleCharacter(data) {
+  const counts = new Map();
+  for (const m of data.mentions || []) counts.set(m.id, (counts.get(m.id) || 0) + 1);
+  const pool = data.characters.filter((c) => !c.past);
+  const best = pool.filter((c) => c.role === 'main').sort((a, b) => (counts.get(b.id) || 0) - (counts.get(a.id) || 0))[0] || pool[0];
+  if (!best) return null;
+  const token = data.mentions?.find((m) => m.id === best.id)?.token || best.jp || '';
+  return { id: best.id, ru: best.ru, jp: best.jp, romaji: best.romaji, role: best.role, img: best.img, desc: best.desc, gender: best.gender, token };
 }
 
 // ---------- сообщения ----------
@@ -561,12 +723,16 @@ const handlers = {
       episodeSource,
       loaded: { malId: info.malId, episode, dubKey: dub, playerEpisode: msg.episode || null },
     });
+    pruneCache().catch((e) => console.warn('Уборка кеша', e));
     try {
       const data = await buildEpisode(info, episode);
       data.dub = dub;
       data.settings = await getSettings();
       data.offset = await loadOffset(info.malId, episode, dub, data.settings);
-      await patchTab(tabId, { lastStatus: data.status, subtitle: data.subtitle, candidates: data.candidates, title: data.anime.title, dubKey: dub });
+      await patchTab(tabId, {
+        lastStatus: data.status, subtitle: data.subtitle, candidates: data.candidates, title: data.anime.title, dubKey: dub,
+        sample: sampleCharacter(data),
+      });
       return data;
     } catch (e) {
       console.error(e);
@@ -585,6 +751,16 @@ const handlers = {
 
   async image(msg) {
     try { return { dataUrl: await imageDataUrl(msg.url) }; } catch { return { dataUrl: null }; }
+  },
+
+  async 'character-card'(msg) {
+    try { return { card: await characterCard(msg.id) }; } catch (e) { return { card: null, error: String(e.message || e) }; }
+  },
+
+  async 'known-characters'(msg, sender) {
+    const info = await getTab(sender.tab?.id ?? msg.tabId);
+    if (!info.malId) return { known: null };
+    try { return await knownCharacters(info.malId, msg.episode || info.episode || 1); } catch (e) { return { known: null, error: String(e.message || e) }; }
   },
 
   async 'open-url'(msg, sender) {
@@ -671,7 +847,7 @@ const handlers = {
 
   async 'clear-cache'() {
     const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => /^(shiki2?|anilist|jimaku|ep):/.test(k));
+    const keys = Object.keys(all).filter((k) => /^(shiki\d?|anilist\d?|jimaku|ep|seen|card\d?|search):/.test(k));
     await chrome.storage.local.remove(keys);
     imageCache.clear();
     return { ok: true, removed: keys.length };
@@ -697,6 +873,9 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
     sendToPlayer(tab.id, { type: 'resync' });
   }
 });
+
+chrome.runtime.onStartup.addListener(() => { pruneCache({ force: true }).catch(() => {}); });
+chrome.runtime.onInstalled.addListener(() => { pruneCache({ force: true }).catch(() => {}); });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   chrome.storage.session.remove(`tab:${tabId}`);

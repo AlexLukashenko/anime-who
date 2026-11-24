@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSubtitle, cleanText, speechIntervals } from '../extension/lib/subs.js';
 import { buildMatcher, matchText, findMentions, romajiKey } from '../extension/lib/names.js';
-import { episodeNumberFromName, pickCandidates } from '../extension/lib/episodes.js';
+import { episodeNumberFromName, pickCandidates, subtitleLabel } from '../extension/lib/episodes.js';
+import { relatedCharacters, stripSpoilers } from '../extension/lib/desc.js';
+import { pickPrune } from '../extension/lib/cache.js';
 import { SyncEstimator, OffsetTracker } from '../extension/lib/sync.js';
 
 // Синтетические строки в формате японских [cc]-субтитров: метки говорящих, фуригана, ремарки, музыка
@@ -216,4 +218,47 @@ test('Ручной выбор аниме: ссылки и ID', () => {
   assert.equal(parseAnimeRef(' 61987 '), 61987);
   assert.equal(parseAnimeRef('Монолог фармацевта'), null);
   assert.equal(parseAnimeRef(''), null);
+});
+
+test('Короткая подпись файла субтитров', () => {
+  assert.equal(subtitleLabel('薬屋のひとりごと.S03E01.第49話.蝗（いなご）.WEBRip.Amazon.ja-jp[sdh].srt'), 'Amazon WEBRip');
+  assert.equal(subtitleLabel('薬屋のひとりごと.S03E49.蝗.WEBRip.Netflix.ja[cc].srt'), 'Netflix WEBRip');
+  assert.equal(subtitleLabel('[Nekomoe kissaten&LoliHouse] Kusuriya no Hitorigoto - 49 [WebRip 1080p HEVC-10bit AAC ASSx2][JPN].ass'), 'Nekomoe kissaten&LoliHouse · WEBRip');
+  assert.equal(subtitleLabel('[shincaps] Kusuriya no Hitorigoto 3rd Season - 01 (AT-X 1440x1080 MPEG2 AAC).srt'), 'AT-X');
+  assert.equal(subtitleLabel('episode01.ass'), 'ASS');
+});
+
+test('Связанные персонажи из описания — без спойлеров и повторов', () => {
+  const raw = 'Служит при дворе. Разоблачил [character=155904 маомао]. Друг [character=178876]Гаошуня[/character] и снова [character=155904 маомао]. [spoiler]Брат [character=178866 император][/spoiler]';
+  assert.deepEqual(relatedCharacters(raw), [{ id: 155904, name: 'Маомао' }, { id: 178876, name: 'Гаошуня' }]);
+  assert.ok(!stripSpoilers(raw).includes('178866'));
+});
+
+test('Уборка кеша: старое, переполнение, пользовательские данные не трогаем', () => {
+  const DAY = 864e5;
+  const now = 100 * DAY;
+  const big = 'x'.repeat(1000);
+  const all = {
+    'jimaku:index': { at: now - 5 * DAY, value: [] }, // старше 3 дней
+    'ep:1:1:u': { at: now - 10 * DAY, value: big },
+    'ep:1:2:u': { at: now - 1 * DAY, value: big },
+    'shiki3:1': { at: now - 2 * DAY, value: {} },
+    'off:1:1:anilibria': { at: now - 400 * DAY, value: 3 }, // задержка — пользовательская
+    'muted:1': [5],
+    'subCustom:1:1': { at: now - 400 * DAY, value: big },
+  };
+  assert.deepEqual(pickPrune(all, now), ['jimaku:index']);
+  // Лимит меньше размера: сначала уходят самые старые записи кеша
+  const removed = pickPrune(all, now, { maxBytes: 2500 });
+  assert.ok(removed.includes('jimaku:index') && removed.includes('ep:1:1:u'));
+  assert.ok(!removed.some((k) => /^(off|muted|subCustom):/.test(k)));
+});
+
+test('Персонажи прошлых сезонов не отнимают имена у текущего сезона', () => {
+  const m = buildMatcher([
+    { id: 1, name: 'Maomao', russian: 'Маомао', japanese: '猫猫' },
+    { id: 2, name: 'Mao', russian: 'Мао', japanese: '猫猫', past: true }, // то же написание — у текущего
+    { id: 3, name: 'Fuyou', russian: 'Фуё', japanese: '芙蓉', past: true },
+  ]);
+  assert.deepEqual(matchText(m, '猫猫と芙蓉'), [{ id: 1, token: '猫猫' }, { id: 3, token: '芙蓉' }]);
 });

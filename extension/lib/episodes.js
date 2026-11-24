@@ -64,3 +64,23 @@ export function pickCandidates(files, episode, seasonEpisodes) {
     .map((f) => ({ ...f, score: scoreFile(f.name) - (f.size && f.size < 3000 ? 20 : 0) }))
     .sort((a, b) => b.score - a.score);
 }
+
+const PLATFORMS = [
+  [/netflix|\bnf\b/i, 'Netflix'], [/amazon|amzn|prime/i, 'Amazon'], [/abema/i, 'ABEMA'], [/hulu/i, 'Hulu'],
+  [/u-?next/i, 'U-NEXT'], [/disney/i, 'Disney+'], [/crunchyroll/i, 'Crunchyroll'], [/bilibili/i, 'Bilibili'],
+  [/\bbaha\b/i, 'Baha'], [/danime|dアニメ/i, 'dアニメ'], [/at-?x/i, 'AT-X'], [/tokyo ?mx/i, 'Tokyo MX'],
+  [/\bbs11\b/i, 'BS11'], [/\bnhk\b/i, 'NHK'], [/\bmbs\b/i, 'MBS'], [/\btbs\b/i, 'TBS'], [/\bctv\b/i, 'CTV'], [/\bntv\b/i, 'NTV'],
+];
+const SOURCES = [[/web-?rip/i, 'WEBRip'], [/web-?dl/i, 'WEB-DL'], [/bd-?rip|blu-?ray|\bbd\b/i, 'BD'], [/\bweb\b/i, 'WEB']];
+
+/** Короткая подпись файла субтитров: «Amazon WEBRip», «Nekomoe kissaten · WEBRip», «AT-X». */
+export function subtitleLabel(filename) {
+  const name = String(filename || '').replace(/^.*\//, '');
+  const platform = PLATFORMS.find(([re]) => re.test(name))?.[1] || '';
+  const source = SOURCES.find(([re]) => re.test(name))?.[1] || '';
+  if (platform) return [platform, source].filter(Boolean).join(' ');
+  const group = name.match(/^\[([^\]]{2,40})\]/)?.[1]?.trim();
+  if (group) return [group, source].filter(Boolean).join(' · ');
+  if (source) return source;
+  return (name.match(SUB_EXT_RE)?.[1] || 'файл').toUpperCase();
+}

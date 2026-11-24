@@ -90,7 +90,7 @@ function ruStemPattern(word) {
 }
 
 /**
- * characters: [{id, name, russian, japanese, synonyms[], altNames[]}]
+ * characters: [{id, name, russian, japanese, synonyms[], altNames[], past?}]
  * Возвращает матчер с регэкспами по трём письменностям.
  */
 export function buildMatcher(characters) {
@@ -99,13 +99,23 @@ export function buildMatcher(characters) {
     if (!map.has(tok)) map.set(tok, new Set());
     map.get(tok).add(id);
   };
-  for (const ch of characters) {
+  // Сначала персонажи текущего сезона, потом из прошлых (past: true): имя, занятое
+  // персонажем текущего сезона, за прошлым сезоном не закрепляем — иначе оно станет
+  // неоднозначным и пропадёт у обоих.
+  const current = { cjk: new Set(), lat: new Set(), cyr: new Set() };
+  const ordered = [...characters.filter((c) => !c.past), ...characters.filter((c) => c.past)];
+  for (const ch of ordered) {
     const sources = [ch.japanese, ch.name, ch.russian, ...(ch.synonyms || []), ...(ch.altNames || [])]
       .filter(Boolean).map((s) => String(s).trim());
+    const put = (kind, tok) => {
+      if (ch.past && current[kind].has(tok)) return;
+      if (!ch.past) current[kind].add(tok);
+      add(owners[kind], tok, ch.id);
+    };
     for (const s of sources) {
-      if (CJK_RE.test(s)) for (const v of variantsCjk(s)) add(owners.cjk, v, ch.id);
-      if (LATIN_RE.test(s)) for (const v of variantsLatin(s)) add(owners.lat, v, ch.id);
-      if (CYR_RE.test(s)) for (const v of variantsCyr(s)) add(owners.cyr, v.toLowerCase(), ch.id);
+      if (CJK_RE.test(s)) for (const v of variantsCjk(s)) put('cjk', v);
+      if (LATIN_RE.test(s)) for (const v of variantsLatin(s)) put('lat', v);
+      if (CYR_RE.test(s)) for (const v of variantsCyr(s)) put('cyr', v.toLowerCase());
     }
   }
   const tokenToId = { cjk: new Map(), lat: new Map(), cyr: new Map() };

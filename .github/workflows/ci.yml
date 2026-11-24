@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Версии совпадают
+        run: node scripts/check-version.mjs
+      - name: Синтаксис скриптов расширения
+        run: |
+          for f in $(find extension -name '*.js' -not -path 'extension/vendor/*'); do node --check "$f"; done
+      - name: Юнит-тесты
+        run: npm test
+      - name: Сборка ZIP
+        run: node scripts/pack.mjs

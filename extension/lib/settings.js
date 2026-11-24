@@ -5,6 +5,7 @@ export const SETTINGS_DEFAULTS = {
   showMain: true, // главные герои
   showSupporting: true, // второстепенные
   showSpeakers: false, // «кто говорит», если в субтитрах есть метки говорящих
+  noSpoilers: false, // в панели — только тех, кого уже называли в этой или прошлых сериях
   // что показывать в баннере
   fPhoto: true,
   fRu: true, // имя по-русски

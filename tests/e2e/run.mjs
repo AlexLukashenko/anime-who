@@ -133,12 +133,12 @@ await frame.evaluate(() => document.querySelector('kto-eto-overlay').shadowRoot.
 await sleep(800);
 await page.screenshot({ path: `${OUT}/panel.png` });
 const linkInfo = await frame.evaluate(() => {
-  const a = document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.list a.link[data-open]');
+  const a = document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.list a.ext[data-open]');
   return { href: a.href, text: a.textContent };
 });
 const [shikiPage] = await Promise.all([
   ctx.waitForEvent('page', { timeout: 6000 }).catch(() => null),
-  frame.evaluate(() => document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.list a.link[data-open]').click()),
+  frame.evaluate(() => document.querySelector('kto-eto-overlay').shadowRoot.querySelector('.list a.ext[data-open]').click()),
 ]);
 if (shikiPage) await shikiPage.waitForLoadState('domcontentloaded').catch(() => {});
 check('ссылка из панели открывает Shikimori в новой вкладке', shikiPage?.url() === linkInfo.href && /^https:\/\/shikimori\.io\/characters\/\d+$/.test(linkInfo.href),

@@ -1,0 +1,30 @@
+name: Release
+
+# Релиз: поднять версию в extension/manifest.json и package.json, затем
+#   git tag v0.3.0 && git push origin v0.3.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-version.mjs "$GITHUB_REF_NAME"
+      - run: npm test
+      - name: Сборка ZIP
+        id: pack
+        run: echo "zip=$(node scripts/pack.mjs)" >> "$GITHUB_OUTPUT"
+      - name: Релиз на GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.pack.outputs.zip }}" \
+            --title "$GITHUB_REF_NAME" --generate-notes

@@ -3,9 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/core.test.mjs"
+    "test": "node --test tests/core.test.mjs",
+    "test:live": "node tests/e2e/run-live.mjs",
+    "pack": "node scripts/pack.mjs",
+    "check-version": "node scripts/check-version.mjs"
   },
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Chrome-расширение: фото, имя и роль персонажа аниме, когда о нём говорят в серии",
   "license": "MIT",
   "repository": {
