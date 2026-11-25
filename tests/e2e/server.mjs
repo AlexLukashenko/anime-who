@@ -64,11 +64,15 @@ const cvhWrapper = `<!doctype html><html><body style="margin:0;background:#000">
 const genericPlayer = `<!doctype html><html><head><style>html,body{margin:0;height:100%;background:#000}video{width:100%;height:100%}</style></head>
 <body><video src="/episode.webm" preload="auto" playsinline></video></body></html>`;
 // Сайт в стиле DreamCast: видео прямо на странице, ссылки на Shikimori нет
-const dreamPage = (title, ep) => `<!doctype html><html><head><meta charset="utf-8"><title>${title} — ${ep} серия | Dream Cast</title>
+// Как на настоящем dreamerscast.com: адрес /home/release/<id>-<slug> без номера серии, h1 нет,
+// название «Русское / Romaji - Dream Cast», серия — активный пункт плейлиста Playerjs
+const dreamPage = (title, ep) => `<!doctype html><html><head><meta charset="utf-8"><title>${title} - Dream Cast</title>
+<meta property="og:title" content="${title} - Dream Cast">
 <style>body{background:#16161d;color:#eee;font-family:sans-serif;margin:0}main{padding:10px 20px}video{width:960px;height:540px;background:#000}
-.eps span{display:inline-block;padding:4px 10px;margin:2px;background:#333}.eps .active{background:#c33}</style></head>
-<body><main><h1>${title}</h1><div class="eps">${[1, 2, 3].map((n) => `<span class="${n === ep ? 'active' : ''}">${n}</span>`).join('')}</div>
-<video id="v" src="/episode.webm" preload="auto" playsinline></video></main></body></html>`;
+pjsdiv{display:inline-block;padding:4px 10px;margin:2px;background:#333}.pjs-player-active-pl{background:#c33}</style></head>
+<body><main><h2>${title}</h2><video id="v" src="/episode.webm" preload="auto" playsinline></video>
+<div class="playlist">${[1, 2, 3].map((n) => `<pjsdiv class="${n === ep ? 'pjs-player-active-pl' : ''}"><pjsdiv>Серия ${n}</pjsdiv></pjsdiv>`).join('')}</div>
+</main></body></html>`;
 
 const yummyPage = `<!doctype html><html><head><meta charset="utf-8"><meta name="page_id" content="24452"><title>Монолог фармацевта 3</title></head><body style="background:#222;color:#eee;font-family:sans-serif">
 <h1>Монолог фармацевта 3</h1>
@@ -117,8 +121,8 @@ const server = https.createServer({ key: fs.readFileSync(OUT + '/key.pem'), cert
   if ((host === 'cdn-player.test' || host === 'dreamerscast.com') && url.pathname === '/episode.webm') return sendVideo(req, res);
   if (host === 'cdn-player.test') return send(res, 200, 'text/html; charset=utf-8', genericPlayer);
   if (host === 'dreamerscast.com') {
-    const m = url.pathname.match(/^\/release\/([a-z0-9-]+)\/(\d+)/);
-    if (m) return send(res, 200, 'text/html; charset=utf-8', dreamPage(m[1] === 'kusuriya-3' ? 'Монолог фармацевта 3' : 'Совсем неизвестное аниме', Number(m[2])));
+    const m = url.pathname.match(/^\/home\/release\/\d+-([a-z0-9-]+)$/);
+    if (m) return send(res, 200, 'text/html; charset=utf-8', dreamPage(m[1] === 'kusuriya-3' ? 'Монолог фармацевта 3 / Kusuriya no Hitorigoto 3rd Season' : 'Совсем неизвестное аниме / Totally Unknown', 1));
   }
   if (host === 'kodikplayer.com') {
     if (url.pathname === '/episode.webm') return sendVideo(req, res);
@@ -131,8 +135,11 @@ const server = https.createServer({ key: fs.readFileSync(OUT + '/key.pem'), cert
       req.on('end', () => {
         const q = JSON.parse(body || '{}');
         if (/animes\(search/.test(q.query || '')) {
-          const hit = /фармацевт/i.test(q.variables?.q || '');
-          const animes = hit ? [{ id: '61987', malId: '61987', name: 'Kusuriya no Hitorigoto 3rd Season', russian: 'Монолог фармацевта 3', japanese: '薬屋のひとりごと 第3期', english: 'The Apothecary Diaries Season 3', kind: 'tv' }] : [];
+          const sq = q.variables?.q || '';
+          const right = { id: '61987', malId: '61987', name: 'Kusuriya no Hitorigoto 3rd Season', russian: 'Монолог фармацевта 3', japanese: '薬屋のひとりごと 第3期', english: 'The Apothecary Diaries Season 3', kind: 'tv' };
+          // Как настоящий Shikimori: на «Русское / Romaji» целиком первым приходит другое аниме
+          const decoy = { id: '58514', malId: '58514', name: 'Kusuriya no Hitorigoto 2nd Season', russian: 'Монолог фармацевта 2', kind: 'tv' };
+          const animes = !/фармацевт|kusuriya/i.test(sq) ? [] : sq.includes(' / ') ? [decoy, right] : [right];
           return send(res, 200, 'application/json', JSON.stringify({ data: { animes } }));
         }
         return send(res, 200, 'application/json', JSON.stringify(shikiResponse));

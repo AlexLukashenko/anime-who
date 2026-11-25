@@ -46,3 +46,25 @@ export function matchAnilist(shiki, anilist) {
   }
   return out;
 }
+
+// ---------- поиск аниме по названию со страницы ----------
+
+/**
+ * Названия для поиска. Сайты пишут «Русское / Romaji» (DreamCast): целиком такая строка
+ * находит на Shikimori не то («Голубая шкатулка 2 / Ao no Hako 2» → другое аниме), поэтому
+ * ищем каждую часть отдельно. Разделитель — косая черта с пробелами: «Fate/Zero» не делим.
+ */
+export function titleVariants(title) {
+  const q = String(title || '').replace(/\s+/g, ' ').trim();
+  const parts = q.split(/\s+\/\s+/).map((s) => s.trim()).filter((s) => s.length >= 2);
+  return parts.length > 1 ? [...new Set(parts)] : (q.length >= 2 ? [q] : []);
+}
+
+const normTitle = (x) => String(x || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+/** Из выдачи поиска: точное совпадение по любому названию, иначе первое. */
+export function pickSearchHit(list, q) {
+  const nq = normTitle(q);
+  const exact = (list || []).find((a) => [a.russian, a.name, a.english, a.japanese].some((n) => normTitle(n) === nq));
+  return { hit: exact || list?.[0] || null, exact: !!exact };
+}

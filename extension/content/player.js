@@ -37,6 +37,9 @@
   };
   const PCM_RATE = 16000;
   const SEND_EVERY = 0.5; // секунд звука в одном сообщении
+  const CONTROLS_MS = 3500; // сколько плеер показывает свои кнопки после движения мыши (Playerjs)
+  // Кнопки плеера поверх видео сверху есть только у DreamCast; у плееров YummyAnime их нет
+  const TOP_CONTROLS = /(^|\.)dreamerscast\.com$/.test(location.hostname);
 
   let settings = { ...DEFAULTS };
   let data = null;
@@ -55,7 +58,7 @@
   })();
 
   let offset = null; // время видео = время субтитров + offset
-  let offsetHow = null; // default | saved | anime-dub | dub | auto | manual
+  let offsetHow = null; // default | site | saved | anime-dub | dub | auto | manual
   let oneShot = false;
   let announcedLock = false; // разовый подбор задержки по звуку (кнопка), когда автоподстройка выключена
   let manualOverride = false;
@@ -69,6 +72,7 @@
   let knownInfo = null;
   let knownLoading = false;
   let card = null; // открытая карточка персонажа: { id, resume }
+  let pointerAt = 0; // когда мышь последний раз двигалась над видео
 
   let sync = { state: 'idle', observed: 0, vad: null, est: null };
   let port = null;
@@ -169,12 +173,13 @@
     if (v === video) return;
     video = v;
     stopCapture();
-    ['play', 'playing', 'loadedmetadata', 'durationchange'].forEach((ev) => v.addEventListener(ev, onVideoEvent));
+    ['play', 'playing', 'pause', 'loadedmetadata', 'durationchange'].forEach((ev) => v.addEventListener(ev, onVideoEvent));
     onVideoEvent();
   }
 
   function onVideoEvent() {
     if (!video) return;
+    updateControls();
     if (!data && !loading && !noAnime && (video.duration || 0) > 120) load();
     if (data && !video.paused) {
       ensureAudioSync();
@@ -217,7 +222,7 @@
     ensureUi();
     renderPanel();
     if (settings.noSpoilers) loadKnown();
-    if (offset == null) { offset = Number(settings.startDelay) || 0; offsetHow = 'default'; }
+    if (offset == null) { offset = defaultOffset(); offsetHow = offset > (Number(settings.startDelay) || 0) ? 'site' : 'default'; }
     if (data.status !== 'ok') toast(data.message || 'Субтитры не найдены — доступна только панель персонажей (Alt+Shift+C).');
     else toast(`«${data.anime.title}», ${data.anime.episode} серия · задержка субтитров ${fmtOffset(offset)}`, 4000);
     reportSync();
@@ -249,12 +254,17 @@
 
   // ---------- сдвиг ----------
 
+  /** Задержка по умолчанию: из настроек, но не меньше постоянной заставки сайта (DreamCast). */
+  function defaultOffset() {
+    return Math.max(Number(settings.startDelay) || 0, Number(data?.offset?.intro) || 0);
+  }
+
   function setOffset(value, how, { save = true } = {}) {
     const changed = offset == null || Math.abs(value - offset) > 0.05 || how !== offsetHow;
     offset = Math.round(value * 100) / 100;
     offsetHow = how;
     lastSubT = null;
-    if (save && changed && how !== 'default') send({ type: 'save-offset', value: offset, how: how === 'manual' ? 'manual' : 'auto', episode: data?.anime?.episode });
+    if (save && changed && how !== 'default' && how !== 'site') send({ type: 'save-offset', value: offset, how: how === 'manual' ? 'manual' : 'auto', episode: data?.anime?.episode });
     reportSync();
     renderPanel();
   }
@@ -279,7 +289,7 @@
     }
     port.onMessage.addListener(onPortMessage);
     port.onDisconnect.addListener(() => { port = null; stopCapture(); });
-    port.postMessage({ type: 'init', intervals: data.speech, initialOffset: offset });
+    port.postMessage({ type: 'init', intervals: data.speech, initialOffset: offset, minOffset: data.offset?.minOffset ?? null });
     sync.state = 'listening';
     if (!tabCaptureMode) startCapture();
   }
@@ -445,7 +455,11 @@
   :host { all: initial; }
   .wrap { position: fixed; inset: 0; pointer-events: none; z-index: 2147483647; overflow: hidden;
     font: clamp(11px, 1.25vw, 15px)/1.3 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #fff; }
-  .stack { position: absolute; top: 12px; display: flex; flex-direction: column; gap: 8px; max-width: min(360px, 60vw); }
+  .stack { position: absolute; top: 12px; display: flex; flex-direction: column; gap: 8px; max-width: min(360px, 60vw); transition: top .25s ease; }
+  /* DreamCast (Playerjs) показывает свои кнопки сверху: серия и ←/→ слева, две кнопки справа — до 58px.
+     Пока они видны, баннеры ниже них; кнопка «кто есть кто» — левее правых кнопок */
+  .wrap.pjs.ctl .stack { top: 68px; }
+  .wrap.pjs .toggle { top: 20px; right: 164px; }
   .stack.left { left: 12px; } .stack.right { right: 104px; align-items: flex-end; }
   .banner { display: flex; gap: 10px; align-items: center; padding: 7px 14px 7px 7px; border-radius: 12px;
     background: rgba(14, 14, 20, .84); backdrop-filter: blur(8px); box-shadow: 0 6px 24px rgba(0,0,0,.45);
@@ -551,6 +565,7 @@
       controls: root.querySelector('.controls'),
       list: root.querySelector('.list'),
     };
+    els.wrap.classList.toggle('pjs', TOP_CONTROLS);
     els.toggle.addEventListener('click', () => togglePanel());
     root.querySelector('.close').addEventListener('click', () => togglePanel(false));
     els.controls.addEventListener('click', onControl);
@@ -565,13 +580,29 @@
     placeHost();
     applyPosition();
     let hideTimer = null;
-    document.addEventListener('mousemove', () => {
+    let ctlTimer = null;
+    document.addEventListener('mousemove', (e) => {
       els.toggle.classList.add('show');
       clearTimeout(hideTimer);
       hideTimer = setTimeout(() => els.toggle.classList.remove('show'), 2500);
+      // Мышь над видео — плеер показывает свои кнопки, пока она двигается, и ещё ~3.5 с
+      const r = video?.getBoundingClientRect();
+      if (r && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) {
+        pointerAt = Date.now();
+        updateControls();
+        clearTimeout(ctlTimer);
+        ctlTimer = setTimeout(updateControls, CONTROLS_MS + 50);
+      }
     }, true);
     document.addEventListener('fullscreenchange', placeHost);
     document.addEventListener('webkitfullscreenchange', placeHost);
+  }
+
+  // Видны ли сейчас кнопки самого плеера: после движения мыши над видео и всё время на паузе
+  function updateControls() {
+    if (!els.wrap || !TOP_CONTROLS) return;
+    const on = !!video?.paused || Date.now() - pointerAt < CONTROLS_MS;
+    els.wrap.classList.toggle('ctl', on);
   }
 
   function placeHost() {
@@ -732,6 +763,7 @@
     if (data.subtitle) {
       const how = {
         default: '— по умолчанию из настроек',
+        site: '— заставка сайта в начале серии',
         auto: '— подобрана по звуку ✓',
         manual: '— выставлена вручную',
         saved: '— сохранена для этой серии',
@@ -989,7 +1021,10 @@
     for (const [k, { newValue }] of Object.entries(changes)) if (k in DEFAULTS) settings[k] = newValue ?? DEFAULTS[k];
     if (!data) return; // этот фрейм не плеер
     // новая задержка по умолчанию сразу применяется, если её ещё не меняли для этой серии/озвучки
-    if ('startDelay' in changes && offsetHow === 'default') setOffset(Number(settings.startDelay) || 0, 'default', { save: false });
+    if ('startDelay' in changes && (offsetHow === 'default' || offsetHow === 'site')) {
+      const v = defaultOffset();
+      setOffset(v, v > (Number(settings.startDelay) || 0) ? 'site' : 'default', { save: false });
+    }
     if ('noSpoilers' in changes && settings.noSpoilers && !knownIds) loadKnown();
     if ('autoSync' in changes) {
       if (settings.autoSync) ensureAudioSync();

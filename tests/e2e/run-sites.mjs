@@ -73,9 +73,9 @@ check('CVH: серия и озвучка из API YummyAnime', st?.episode === 1
 await page.screenshot({ path: `${OUT}/cvh.png` });
 await page.close();
 
-// 2. Сайт в стиле DreamCast: видео на самой странице, аниме ищется по названию
+// 2. DreamCast: видео на самой странице, аниме ищется по названию «Русское / Romaji», серия — из плейлиста
 const dc = await ctx.newPage();
-await dc.goto('https://dreamerscast.com/release/kusuriya-3/1');
+await dc.goto('https://dreamerscast.com/home/release/900-kusuriya-3');
 await sleep(1200);
 await play(dc.mainFrame(), 112);
 const b2 = await waitBanner(dc.mainFrame(), 'Маомао', 14);
@@ -89,7 +89,7 @@ await dc.close();
 
 // 3. Неизвестное аниме: подсказка, затем ручной выбор в окне расширения
 const unk = await ctx.newPage();
-await unk.goto('https://dreamerscast.com/release/unknown/1');
+await unk.goto('https://dreamerscast.com/home/release/901-unknown');
 await sleep(1200);
 await play(unk.mainFrame(), 112);
 const t3 = await waitFor(async () => (await overlayOf(unk.mainFrame())).toasts.find((x) => x.includes('Не понял')) || null, 12);
@@ -122,7 +122,7 @@ await pop.reload();
 await sleep(1200);
 await pop.screenshot({ path: `${OUT}/popup-what.png`, fullPage: true });
 const persisted = await sw.evaluate(async () => Object.entries(await chrome.storage.local.get(null)).filter(([k]) => k.startsWith('ovr:')));
-check('ручной выбор запомнен для страницы', persisted.some(([k, v]) => k.includes('dreamerscast.com/release/unknown/1') && v.malId === 61987 && v.episode === 2), JSON.stringify(persisted));
+check('ручной выбор запомнен для страницы', persisted.some(([k, v]) => k.includes('dreamerscast.com/home/release/901-unknown') && v.malId === 61987 && v.episode === 2), JSON.stringify(persisted));
 
 if (errors.length) console.log(errors.join('\n'));
 console.log(failed ? `\n${failed} проверок не прошло` : '\nВсе проверки прошли');

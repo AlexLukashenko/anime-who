@@ -5,7 +5,7 @@ import { buildMatcher, matchText, findMentions, romajiKey, learnSpeakerNames, ha
 import { episodeNumberFromName, pickCandidates, subtitleLabel } from '../extension/lib/episodes.js';
 import { relatedCharacters, stripSpoilers } from '../extension/lib/desc.js';
 import { pickPrune } from '../extension/lib/cache.js';
-import { matchAnilist } from '../extension/lib/match.js';
+import { matchAnilist, titleVariants, pickSearchHit } from '../extension/lib/match.js';
 import { SyncEstimator, OffsetTracker } from '../extension/lib/sync.js';
 
 // Синтетические строки в формате японских [cc]-субтитров: метки говорящих, фуригана, ремарки, музыка
@@ -318,4 +318,22 @@ test('Корейские имена: хангыль → катакана, дол
   const { mentions, speakers } = findMentions(events, lm);
   assert.deepEqual(speakers.map((s) => s.id), [1, 4, 5]);
   assert.deepEqual(mentions.map((x) => x.id), [3, 1]);
+});
+
+test('поиск по названию: «Русское / Romaji» ищем по частям, точное совпадение важнее первого', () => {
+  assert.deepEqual(titleVariants('Голубая шкатулка 2 / Ao no Hako 2'), ['Голубая шкатулка 2', 'Ao no Hako 2']);
+  assert.deepEqual(titleVariants('Fate/Zero'), ['Fate/Zero']); // без пробелов — часть названия
+  assert.deepEqual(titleVariants('  Монолог   фармацевта 3 '), ['Монолог фармацевта 3']);
+  assert.deepEqual(titleVariants('x'), []);
+
+  // Как отвечает Shikimori: на всю строку — другое аниме первым, на русскую часть — точное
+  const maou = { malId: '48418', russian: 'Непризнанный школой владыка демонов! … 2. Часть 2', name: 'Maou Gakuin no Futekigousha II Part 2' };
+  const aoNoHako = { malId: '61323', russian: 'Голубая шкатулка 2', name: 'Ao no Hako Season 2' };
+  assert.deepEqual(pickSearchHit([maou, aoNoHako], 'Голубая шкатулка 2 / Ao no Hako 2'), { hit: maou, exact: false });
+  assert.deepEqual(pickSearchHit([aoNoHako], 'Голубая шкатулка 2'), { hit: aoNoHako, exact: true });
+  // Русское название на сайте другое — точное совпадение по ромадзи
+  const kanojo = { malId: '64131', russian: 'Её друг', name: 'Kanojo no Tomodachi' };
+  assert.equal(pickSearchHit([kanojo], 'Подруга моей девушки').exact, false);
+  assert.equal(pickSearchHit([kanojo], 'Kanojo no Tomodachi').exact, true);
+  assert.equal(pickSearchHit([], 'что-то').hit, null);
 });

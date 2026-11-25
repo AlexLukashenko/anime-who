@@ -11,7 +11,7 @@ export const CACHE_RULES = [
   ['card', 30 * DAY],
   ['shiki', 30 * DAY],
   ['anilist', 30 * DAY],
-  ['search:', 30 * DAY],
+  ['search', 30 * DAY],
 ];
 
 export function cacheRule(key) {

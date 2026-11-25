@@ -4,11 +4,11 @@
 import { parseSubtitle, speechIntervals } from './lib/subs.js';
 import { buildMatcher, findMentions, learnSpeakerNames } from './lib/names.js';
 import { pickCandidates, subtitleLabel } from './lib/episodes.js';
-import { SETTINGS_DEFAULTS } from './lib/settings.js';
+import { SETTINGS_DEFAULTS, SITE_OFFSETS } from './lib/settings.js';
 import { cleanDescription, relatedCharacters } from './lib/desc.js';
 import { parseAnimeRef } from './lib/refs.js';
 import { pickPrune } from './lib/cache.js';
-import { matchAnilist } from './lib/match.js';
+import { matchAnilist, titleVariants, pickSearchHit } from './lib/match.js';
 
 const SHIKI = 'https://shikimori.io';
 const JIMAKU = 'https://jimaku.cc';
@@ -117,20 +117,23 @@ const SEARCH_QUERY = `query($q: String!) {
 /** Поиск аниме по названию со страницы (для сайтов без ссылки на Shikimori/MAL). */
 async function searchShikimori(title) {
   const q = (title || '').trim();
-  if (q.length < 2) return null;
-  const key = `search:${q.toLowerCase()}`;
+  const variants = titleVariants(q);
+  if (!variants.length) return null;
+  const key = `search2:${q.toLowerCase()}`;
   const cached = await cacheGet(key, 7 * DAY);
   if (cached !== null) return cached || null;
-  const res = await fetchWithTimeout(`${SHIKI}/api/graphql`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ query: SEARCH_QUERY, variables: { q } }),
-  });
-  const list = (await res.json())?.data?.animes || [];
-  const norm = (x) => (x || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
-  const nq = norm(q);
-  const exact = list.find((a) => [a.russian, a.name, a.english, a.japanese].some((n) => norm(n) === nq));
-  const hit = exact || list[0] || null;
+  // «Русское / Romaji»: сначала точное совпадение по любой части, иначе первый результат первой
+  let hit = null;
+  for (const v of variants) {
+    const res = await fetchWithTimeout(`${SHIKI}/api/graphql`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ query: SEARCH_QUERY, variables: { q: v } }),
+    });
+    const found = pickSearchHit((await res.json())?.data?.animes || [], v);
+    if (found.exact) { hit = found.hit; break; }
+    hit ||= found.hit;
+  }
   const value = hit ? { malId: Number(hit.malId || hit.id), title: hit.russian || hit.name } : false;
   await cacheSet(key, value);
   return value || null;
@@ -373,17 +376,22 @@ function dubKey(info) {
 
 /**
  * Задержка субтитров: сохранённая для этой серии → для этого аниме с этой озвучкой →
- * для этой озвучки вообще → задержка по умолчанию из настроек.
+ * для этой озвучки вообще → заставка сайта (если задержка из настроек меньше) → из настроек.
+ * intro и minOffset сайта уходят в плеер: от них считается задержка по умолчанию и диапазон подбора.
  */
-async function loadOffset(malId, episode, dub, settings) {
+async function loadOffset(malId, episode, dub, settings, site) {
+  const prof = SITE_OFFSETS[site] || null;
+  const extra = prof ? { intro: prof.intro, minOffset: prof.minOffset } : {};
   const keys = [`off:${malId}:${episode}:${dub}`, `offDub:${malId}:${dub}`, `offDubAny:${dub}`];
   const r = await chrome.storage.local.get(keys);
-  if (r[keys[0]]) return { value: r[keys[0]].value, source: 'saved' };
+  if (r[keys[0]]) return { value: r[keys[0]].value, source: 'saved', ...extra };
   if (dub !== 'unknown') {
-    if (r[keys[1]]) return { value: r[keys[1]].value, source: 'anime-dub' };
-    if (r[keys[2]]) return { value: r[keys[2]].value, source: 'dub' };
+    if (r[keys[1]]) return { value: r[keys[1]].value, source: 'anime-dub', ...extra };
+    if (r[keys[2]]) return { value: r[keys[2]].value, source: 'dub', ...extra };
   }
-  return { value: Number(settings?.startDelay) || 0, source: 'default' };
+  const base = Number(settings?.startDelay) || 0;
+  if (prof && prof.intro > base) return { value: prof.intro, source: 'site', ...extra };
+  return { value: base, source: 'default', ...extra };
 }
 
 async function saveOffset(malId, episode, dub, value, how) {
@@ -741,7 +749,7 @@ const handlers = {
       const data = await buildEpisode(info, episode);
       data.dub = dub;
       data.settings = await getSettings();
-      data.offset = await loadOffset(info.malId, episode, dub, data.settings);
+      data.offset = await loadOffset(info.malId, episode, dub, data.settings, info.site);
       await patchTab(tabId, {
         lastStatus: data.status, subtitle: data.subtitle, candidates: data.candidates, title: data.anime.title, dubKey: dub,
         sample: sampleCharacter(data),
@@ -860,7 +868,7 @@ const handlers = {
 
   async 'clear-cache'() {
     const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => /^(shiki\d?|anilist\d?|jimaku|ep|seen|card\d?|search):/.test(k));
+    const keys = Object.keys(all).filter((k) => /^(shiki\d?|anilist\d?|jimaku|ep|seen|card\d?|search\d?):/.test(k));
     await chrome.storage.local.remove(keys);
     imageCache.clear();
     return { ok: true, removed: keys.length };

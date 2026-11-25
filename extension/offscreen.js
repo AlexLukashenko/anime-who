@@ -73,7 +73,8 @@ class Session {
 
   async init(msg) {
     await ready;
-    this.est = new SyncEstimator(msg.intervals || []);
+    // На сайтах с постоянной заставкой задержка не бывает меньше её — так меньше ложных пиков
+    this.est = new SyncEstimator(msg.intervals || [], msg.minOffset != null ? { minOffset: msg.minOffset } : {});
     this.tracker = new OffsetTracker(msg.initialOffset ?? null);
     this.vad = modelSession ? new SileroVad(ort, modelSession) : new EnergyVad();
     this.port.postMessage({ type: 'ready', vad: vadKind });
