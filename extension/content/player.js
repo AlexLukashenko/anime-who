@@ -577,6 +577,15 @@
       openCard(Number(b.dataset.id));
     });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && card) { e.stopPropagation(); closeCard(); } }, true);
+    // Колесо над панелью или карточкой должно листать их, а не доходить до плеера:
+    // в полноэкранном режиме оверлей лежит внутри контейнера плеера, и тот
+    // меняет громкость по колесу. Перехватываем на window в фазе захвата —
+    // раньше любых обработчиков страницы на document и предках; preventDefault
+    // не зовём, поэтому родная прокрутка списка работает.
+    addEventListener('wheel', (e) => {
+      const path = e.composedPath();
+      if (path.includes(els.panel) || path.some((n) => n.classList?.contains('card-bg'))) e.stopImmediatePropagation();
+    }, { capture: true });
     placeHost();
     applyPosition();
     let hideTimer = null;
