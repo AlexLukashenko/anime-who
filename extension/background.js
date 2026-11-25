@@ -13,7 +13,7 @@ import { matchAnilist, titleVariants, pickSearchHit } from './lib/match.js';
 const SHIKI = 'https://shikimori.io';
 const JIMAKU = 'https://jimaku.cc';
 const CLIENT_ID = 'kto-eto-anime-extension/0.1';
-const DATA_VERSION = 3; // поменять, если изменится формат подготовленных данных (2 — персонажи прошлых сезонов, 3 — хангыль и имена из меток говорящих)
+const DATA_VERSION = 4; // поменять, если изменится формат подготовленных данных (2 — персонажи прошлых сезонов, 3 — хангыль и имена из меток говорящих, 4 — однознаковые имена и прозвища катаканой)
 
 // ---------- утилиты ----------
 
@@ -534,7 +534,7 @@ async function knownCharacters(malId, episode) {
       return files;
     };
     await pool(prevEpisodes, 3, async (ep) => {
-      const key = `seen2:${malId}:${ep}`; // 2 — хангыль и имена из меток говорящих
+      const key = `seen3:${malId}:${ep}`; // 2 — хангыль и имена из меток говорящих, 3 — однознаковые имена и прозвища
       let ids = await cacheGet(key, 60 * DAY);
       if (!ids) {
         const cand = pickCandidates(await filesOnce(), ep, seasonEps)[0];
@@ -868,7 +868,7 @@ const handlers = {
 
   async 'clear-cache'() {
     const all = await chrome.storage.local.get(null);
-    const keys = Object.keys(all).filter((k) => /^(shiki\d?|anilist\d?|jimaku|ep|seen|card\d?|search\d?):/.test(k));
+    const keys = Object.keys(all).filter((k) => /^(shiki\d?|anilist\d?|jimaku|ep|seen\d?|card\d?|search\d?):/.test(k));
     await chrome.storage.local.remove(keys);
     imageCache.clear();
     return { ok: true, removed: keys.length };

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseSubtitle, cleanText, speechIntervals } from '../extension/lib/subs.js';
-import { buildMatcher, matchText, findMentions, romajiKey, learnSpeakerNames, hangulToKatakana } from '../extension/lib/names.js';
+import { buildMatcher, matchText, findMentions, romajiKey, learnSpeakerNames, hangulToKatakana, romajiToKatakana } from '../extension/lib/names.js';
 import { episodeNumberFromName, pickCandidates, subtitleLabel } from '../extension/lib/episodes.js';
 import { relatedCharacters, stripSpoilers } from '../extension/lib/desc.js';
 import { pickPrune } from '../extension/lib/cache.js';
@@ -336,4 +336,31 @@ test('поиск по названию: «Русское / Romaji» ищем п�
   assert.equal(pickSearchHit([kanojo], 'Подруга моей девушки').exact, false);
   assert.equal(pickSearchHit([kanojo], 'Kanojo no Tomodachi').exact, true);
   assert.equal(pickSearchHit([], 'что-то').hit, null);
+});
+
+test('Однознаковые имена — только отдельным словом; прозвища латиницей ищутся катаканой', () => {
+  // «Необъятный океан», 3 серия: «時田 寿 行くぞ！», «トッキーとブッキーは？», метка «（寿）»
+  const cast = [
+    { id: 1, name: 'Ryuujirou Kotobuki', russian: 'Рюдзиро Котобуки', japanese: '寿 竜次郎', synonyms: ['Bukki'], altNames: ['寿竜次郎', 'Bukki'] },
+    { id: 2, name: 'Shinji Tokita', russian: 'Синдзи Токита', japanese: '時田 信治', synonyms: ['Tokki'] },
+    { id: 3, name: 'Azuma', russian: 'Адзума', japanese: '東', synonyms: ['Azuma'] },
+    { id: 4, name: 'Aina Yoshiwara', russian: 'Айна Ёсивара', japanese: '吉原 愛菜', synonyms: ['Cakey'] },
+  ];
+  const m = buildMatcher(cast);
+  const ids = (s) => matchText(m, s).map((x) => x.id).sort();
+  assert.deepEqual(ids('時田 寿 行くぞ！'), [1, 2]);
+  assert.deepEqual(ids('寿先輩 頑張って'), [1]);
+  assert.deepEqual(ids('ほれ 東'), [3]);
+  assert.deepEqual(ids('寿司を食べよう'), []); // внутри слова
+  assert.deepEqual(ids('長寿の秘訣'), []);
+  assert.deepEqual(ids('東に向かう'), []); // дальше хирагана — это не обращение
+  assert.deepEqual(ids('東京'), []);
+  assert.deepEqual(ids('トッキーとブッキーは？'), [1, 2]);
+  assert.deepEqual(ids('ブッキング'), []);
+  const { speakers } = findMentions([{ start: 0, end: 1, text: 'うむ', speakers: ['寿'], speech: true }], m);
+  assert.deepEqual(speakers.map((s) => s.id), [1]);
+  assert.equal(romajiToKatakana('Bukki'), 'ブッキ');
+  assert.equal(romajiToKatakana('Ryuujirou'), 'リュージロー');
+  assert.equal(romajiToKatakana('Cakey'), null); // не романдзи
+  assert.equal(romajiToKatakana('Greed'), null);
 });

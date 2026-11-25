@@ -225,7 +225,73 @@ function variantsCjk(s) {
   for (const v of [...out]) {
     if (codeLen(v) >= 3 && TITLE_SUFFIX_RE.test(v)) out.add(v.slice(0, -1));
   }
-  return new Set([...out].filter((v) => codeLen(v) >= 2 && CJK_RE.test(v) && !JP_GENERIC.has(v) && !/[/／]/.test(v)));
+  // Однознаковые имена и фамилии («寿 竜次郎» → 寿, «東») оставляем: в тексте их ищем
+  // только отдельным словом (см. SINGLE_HAN_*), иначе 寿 нашёлся бы в 寿司.
+  return new Set([...out].filter((v) => (codeLen(v) >= 2 ? CJK_RE.test(v) : SINGLE_HAN_RE.test(v))
+    && !JP_GENERIC.has(v) && !/[/／]/.test(v)));
+}
+
+const SINGLE_HAN_RE = /^\p{Script=Han}$/u;
+// Однознаковое имя — только отдельным словом: слева не иероглиф, не катакана, не латиница и не цифра,
+// справа — конец, знак препинания или пробел либо именной суффикс («寿先輩», «東さん»).
+const SINGLE_HAN_BEFORE = '(?<![\\p{Script=Han}\\p{Script=Katakana}ー々\\p{Script=Latin}\\p{N}])';
+const SINGLE_HAN_AFTER = '(?=$|[^\\p{L}\\p{N}ー々]|さん|くん|君|ちゃん|先輩|様|さま|殿|氏|先生)';
+
+// ---------- прозвища латиницей → катакана ----------
+// На Shikimori/AniList прозвища часто только латиницей («Bukki»), а в субтитрах — катаканой (ブッキー).
+
+const KANA_TABLE = (() => {
+  const t = { a: 'ア', i: 'イ', u: 'ウ', e: 'エ', o: 'オ', shi: 'シ', chi: 'チ', tsu: 'ツ', fu: 'フ', ji: 'ジ', wa: 'ワ', wo: 'ヲ' };
+  for (const [c, row] of Object.entries(KANA_ROWS)) if (c) [...'aiueo'].forEach((v, i) => { t[c + v] ??= row[i]; });
+  for (const [v, k] of [['a', 'ヤ'], ['u', 'ユ'], ['o', 'ヨ']]) t[`y${v}`] = k;
+  for (const [c, i] of [['k', 'キ'], ['g', 'ギ'], ['n', 'ニ'], ['h', 'ヒ'], ['m', 'ミ'], ['r', 'リ'], ['b', 'ビ'], ['p', 'ピ'], ['sh', 'シ'], ['ch', 'チ'], ['j', 'ジ']]) {
+    for (const v of 'auo') t[`${c}${c.length === 1 && c !== 'j' ? 'y' : ''}${v}`] = i + SMALL_Y[v];
+  }
+  for (const v of 'aueo') t[`j${v}`] = `ジ${SMALL_Y[v] || 'ェ'}`;
+  t.she = 'シェ'; t.che = 'チェ'; t.je = 'ジェ';
+  for (const k of ['si', 'ti', 'tu', 'hu', 'zi', 'di', 'du', 'yi', 'ye', 'wi', 'wu', 'we']) delete t[k];
+  return t;
+})();
+const HONORIFIC_RE = /[-\s](chan|kun|san|sama|senpai|sempai|tan|dono)$/i;
+
+/** «Bukki» → «ブッキ», «Ryuujirou» → «リュージロー»; не романдзи («Cakey», «Greed») → null. */
+export function romajiToKatakana(word) {
+  const s = String(word || '').toLowerCase().replace(HONORIFIC_RE, '');
+  if (!/^[a-z]+$/.test(s)) return null;
+  let out = '';
+  let lastVowel = '';
+  for (let i = 0; i < s.length;) {
+    const c = s[i];
+    if (c === 'n' && (i + 1 === s.length || !/[aiueoy]/.test(s[i + 1]))) {
+      out += 'ン'; lastVowel = ''; i += s[i + 1] === 'n' && !/[aiueoy]/.test(s[i + 2] || '') ? 2 : 1; continue;
+    }
+    if (c === s[i + 1] && !/[aiueon]/.test(c)) { out += 'ッ'; i += 1; continue; }
+    if (c === 't' && s.startsWith('tch', i)) { out += 'ッ'; i += 1; continue; }
+    if ('aiueo'.includes(c) && lastVowel && (c === lastVowel || (lastVowel === 'o' && c === 'u'))) {
+      out += 'ー'; lastVowel = ''; i += 1; continue;
+    }
+    let hit = null;
+    for (const len of [3, 2, 1]) if (KANA_TABLE[s.slice(i, i + len)]) { hit = s.slice(i, i + len); break; }
+    if (!hit) return null;
+    out += KANA_TABLE[hit];
+    lastVowel = hit[hit.length - 1];
+    i += hit.length;
+  }
+  return codeLen(out.replace(/[ーッ]/g, '')) >= 2 ? out : null;
+}
+
+/** Прозвища персонажа катаканой: однословные латинские синонимы, которых нет в основном имени. */
+function nicknameKatakana(ch) {
+  const own = new Set(String(ch.name || '').toLowerCase().split(/[^a-z]+/).filter(Boolean));
+  const out = new Set();
+  for (const s of [...(ch.synonyms || []), ...(ch.altNames || [])]) {
+    const w = String(s).trim();
+    if (!LATIN_RE.test(w) || /\s/.test(w.replace(HONORIFIC_RE, ''))) continue;
+    if (own.has(w.toLowerCase().replace(HONORIFIC_RE, ''))) continue;
+    const k = romajiToKatakana(w);
+    if (k) out.add(k);
+  }
+  return out;
 }
 
 function variantsLatin(s) {
@@ -302,6 +368,7 @@ export function buildMatcher(characters) {
       if (LATIN_RE.test(s)) for (const v of variantsLatin(s)) put('lat', v);
       if (CYR_RE.test(s)) for (const v of variantsCyr(s)) put('cyr', v.toLowerCase());
     }
+    for (const k of nicknameKatakana(ch)) if (!JP_GENERIC.has(k)) put('cjk', kataKey(k));
   }
   const tokenToId = { cjk: new Map(), lat: new Map(), cyr: new Map() };
   const ambiguous = [];
@@ -316,9 +383,11 @@ export function buildMatcher(characters) {
   const latToks = [...tokenToId.lat.keys()].sort(byLen);
   const cyrToks = [...tokenToId.cyr.keys()].sort(byLen);
   // Катакану ищем с необязательной «ー» после каждого знака: アイリン ↔ アイリーン.
-  const cjkAlt = cjkToks.map((t) => (KATAKANA_ONLY_RE.test(t)
-    ? `(?<![\\p{Script=Katakana}ー])${[...t].map(escapeRe).join('ー?')}ー?(?![\\p{Script=Katakana}ー])`
-    : escapeRe(t)));
+  const cjkAlt = cjkToks.map((t) => {
+    if (KATAKANA_ONLY_RE.test(t)) return `(?<![\\p{Script=Katakana}ー])${[...t].map(escapeRe).join('ー?')}ー?(?![\\p{Script=Katakana}ー])`;
+    if (SINGLE_HAN_RE.test(t)) return `${SINGLE_HAN_BEFORE}${escapeRe(t)}${SINGLE_HAN_AFTER}`;
+    return escapeRe(t);
+  });
   const re = {
     cjk: cjkAlt.length ? new RegExp(`(${cjkAlt.join('|')})`, 'gu') : null,
     lat: latToks.length ? new RegExp(`(?<![\\p{L}])(${latToks.map(escapeRe).join('|')})(?![\\p{L}])`, 'gu') : null,
