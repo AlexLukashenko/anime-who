@@ -116,6 +116,10 @@ Workflow `release.yml` проверит, что тег совпадает с в�
 
 Идеи на будущее: распознавание речи для тайтлов без субтитров; история баннеров за серию; «Previously on» перед серией.
 
+## Автор
+
+Telegram-канал автора: [@lukashenko_ai](https://t.me/lukashenko_ai).
+
 ## Лицензия и благодарности
 
 Код — [MIT](LICENSE). В `extension/vendor/` лежат [ONNX Runtime Web](https://github.com/microsoft/onnxruntime) и модель [Silero VAD](https://github.com/snakers4/silero-vad), обе под MIT. Подробнее — в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
