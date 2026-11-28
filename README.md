@@ -24,9 +24,9 @@
 
 ## Установка
 
-Проще всего — из [Chrome Web Store](https://chromewebstore.google.com/detail/hnddlhnenonpacngglndclikeinhdcko): нажмите «Установить», обновления придут сами. Версия в магазине может отставать от GitHub на время модерации.
+Проще всего — из [Chrome Web Store](https://chromewebstore.google.com/detail/hnddlhnenonpacngglndclikeinhdcko): нажмите «Установить», обновления придут сами. Новые версии появляются в магазине после модерации, обычно через несколько дней после релиза на GitHub.
 
-Свежая версия с GitHub ставится как распакованное расширение:
+Или вручную, как распакованное расширение:
 
 1. Скачайте `anime-who-<версия>.zip` из [последнего релиза](https://github.com/AlexLukashenko/anime-who/releases/latest) и распакуйте в отдельную папку. Или `git clone https://github.com/AlexLukashenko/anime-who.git` — тогда нужна папка `extension`.
 2. Откройте `chrome://extensions`.
